@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "dependencies": {
+    ".NETFramework,Version=v4.8": {
+      "bblanchon.PDFium.Win32": {
+        "type": "Direct",
+        "requested": "[158.0.8111, )",
+        "resolved": "158.0.8111",
+        "contentHash": "+e5VgLjNYxSr31l7nOyo9qchHjIpD+F8IjZztGe5oaXjmy7KBw9yoal/UtoQR5JD69pfGyf9VXp1jgZZxD7Nbg=="
+      },
+      "Microsoft.NETFramework.ReferenceAssemblies": {
+        "type": "Direct",
+        "requested": "[1.0.3, )",
+        "resolved": "1.0.3",
+        "contentHash": "vUc9Npcs14QsyOD01tnv/m8sQUnGTGOw1BCmKcv77LBJY7OxhJ+zJF7UD/sCL3lYNFuqmQEVlkfS4Quif6FyYg==",
+        "dependencies": {
+          "Microsoft.NETFramework.ReferenceAssemblies.net48": "1.0.3"
+        }
+      },
+      "Microsoft.NETFramework.ReferenceAssemblies.net48": {
+        "type": "Transitive",
+        "resolved": "1.0.3",
+        "contentHash": "zMk4D+9zyiEWByyQ7oPImPN/Jhpj166Ky0Nlla4eXlNL8hI/BtSJsgR8Inldd4NNpIAH3oh8yym0W2DrhXdSLQ=="
+      }
+    },
+    ".NETFramework,Version=v4.8/win": {
+      "bblanchon.PDFium.Win32": {
+        "type": "Direct",
+        "requested": "[158.0.8111, )",
+        "resolved": "158.0.8111",
+        "contentHash": "+e5VgLjNYxSr31l7nOyo9qchHjIpD+F8IjZztGe5oaXjmy7KBw9yoal/UtoQR5JD69pfGyf9VXp1jgZZxD7Nbg=="
+      }
+    },
+    ".NETFramework,Version=v4.8/win-arm64": {
+      "bblanchon.PDFium.Win32": {
+        "type": "Direct",
+        "requested": "[158.0.8111, )",
+        "resolved": "158.0.8111",
+        "contentHash": "+e5VgLjNYxSr31l7nOyo9qchHjIpD+F8IjZztGe5oaXjmy7KBw9yoal/UtoQR5JD69pfGyf9VXp1jgZZxD7Nbg=="
+      }
+    },
+    ".NETFramework,Version=v4.8/win-x64": {
+      "bblanchon.PDFium.Win32": {
+        "type": "Direct",
+        "requested": "[158.0.8111, )",
+        "resolved": "158.0.8111",
+        "contentHash": "+e5VgLjNYxSr31l7nOyo9qchHjIpD+F8IjZztGe5oaXjmy7KBw9yoal/UtoQR5JD69pfGyf9VXp1jgZZxD7Nbg=="
+      }
+    },
+    ".NETFramework,Version=v4.8/win-x86": {
+      "bblanchon.PDFium.Win32": {
+        "type": "Direct",
+        "requested": "[158.0.8111, )",
+        "resolved": "158.0.8111",
+        "contentHash": "+e5VgLjNYxSr31l7nOyo9qchHjIpD+F8IjZztGe5oaXjmy7KBw9yoal/UtoQR5JD69pfGyf9VXp1jgZZxD7Nbg=="
+      }
+    }
+  }
+}
