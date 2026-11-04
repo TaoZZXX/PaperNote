@@ -127,7 +127,6 @@ namespace PaperNote
         Button popupSave;
         Label popupHeading;
         Control readerSurface;
-        ConnectorLayer editorConnector;
         Rectangle popupTargetBounds;
         PdfCanvas popupPage;
         float popupX,popupY,popupW,popupH;
@@ -429,7 +428,7 @@ namespace PaperNote
             popup.Paint += delegate(object s,PaintEventArgs e){using(var path=RoundedRect(new Rectangle(1,1,popup.Width-3,popup.Height-3),21))using(var pen=new Pen(Color.FromArgb(92,61,122),2)){e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;e.Graphics.DrawPath(pen,path);}};
             popupHeading = new Label { Text = "添加批注", Font = new Font("Segoe UI Semibold", 12), AutoSize = true, Location = new Point(14, 10) };
             var close = new Button { Text = "×", FlatStyle = FlatStyle.Flat, Size = new Size(30, 28), Location = new Point(350, 8), BackColor = Color.White, ForeColor = Color.FromArgb(57, 52, 79) };
-            close.Click += delegate { popup.Visible = false;if(editorConnector!=null)editorConnector.Visible=false; quoteBox.ReadOnly=false;noteBox.ReadOnly=false;kindBox.Enabled=true;popupSave.Visible=true; };
+            close.Click += delegate { popup.Visible = false;HideEditorConnector(); quoteBox.ReadOnly=false;noteBox.ReadOnly=false;kindBox.Enabled=true;popupSave.Visible=true; };
             kindBox.DropDownStyle = ComboBoxStyle.DropDownList; kindBox.Items.AddRange(new object[] { "高亮", "公式", "创新点", "实验", "疑问", "普通批注" }); kindBox.SelectedIndex = 0; kindBox.Location = new Point(14, 42); kindBox.Width = 160;
             quoteBox.Multiline = true; quoteBox.Visible=false; quoteBox.ScrollBars = ScrollBars.Vertical; quoteBox.BackColor = Color.FromArgb(255, 252, 244); quoteBox.PlaceholderTextCompat("选中的文字（可手动填写）");
             noteBox.Multiline = true; noteBox.Location = new Point(18, 82); noteBox.Size = new Size(364, 88); noteBox.ScrollBars = ScrollBars.Vertical; noteBox.BackColor = Color.FromArgb(255, 252, 244); noteBox.BorderStyle=BorderStyle.FixedSingle; noteBox.PlaceholderTextCompat("添加批注…"); noteBox.TextChanged += delegate { ResizePopupForText(); };noteBox.KeyDown+=delegate(object s,KeyEventArgs e){if(e.Control&&e.KeyCode==Keys.Back){DeletePreviousWord(noteBox);e.Handled=true;e.SuppressKeyPress=true;}};
@@ -439,11 +438,12 @@ namespace PaperNote
         }
         void PlacePopup(PdfCanvas page,Rectangle target)
         {
-            if(popup.Parent!=page){if(popup.Parent!=null)popup.Parent.Controls.Remove(popup);page.Controls.Add(popup);}if(editorConnector==null)editorConnector=new ConnectorLayer{Dock=DockStyle.Fill};if(editorConnector.Parent!=page){if(editorConnector.Parent!=null)editorConnector.Parent.Controls.Remove(editorConnector);page.Controls.Add(editorConnector);}
+            if(popup.Parent!=page){if(popup.Parent!=null)popup.Parent.Controls.Remove(popup);page.Controls.Add(popup);}
             popupPage=page;
-            popupTargetBounds=target;int gap=22,x,y;if(target.Right+gap+popup.Width<=page.ClientSize.Width-8){x=target.Right+gap;y=target.Top+(target.Height-popup.Height)/2;}else if(target.Left-gap-popup.Width>=8){x=target.Left-gap-popup.Width;y=target.Top+(target.Height-popup.Height)/2;}else if(target.Bottom+gap+popup.Height<=page.ClientSize.Height-8){x=target.Left+(target.Width-popup.Width)/2;y=target.Bottom+gap;}else{x=target.Left+(target.Width-popup.Width)/2;y=target.Top-gap-popup.Height;}x=Math.Max(4,Math.Min(x,page.ClientSize.Width-popup.Width-4));y=Math.Max(4,Math.Min(y,page.ClientSize.Height-popup.Height-4));popup.Location=new Point(x,y);UpdateEditorConnector();editorConnector.BringToFront();popup.BringToFront();
+            popupTargetBounds=target;int gap=22,x,y;if(target.Right+gap+popup.Width<=page.ClientSize.Width-8){x=target.Right+gap;y=target.Top+(target.Height-popup.Height)/2;}else if(target.Left-gap-popup.Width>=8){x=target.Left-gap-popup.Width;y=target.Top+(target.Height-popup.Height)/2;}else if(target.Bottom+gap+popup.Height<=page.ClientSize.Height-8){x=target.Left+(target.Width-popup.Width)/2;y=target.Bottom+gap;}else{x=target.Left+(target.Width-popup.Width)/2;y=target.Top-gap-popup.Height;}x=Math.Max(4,Math.Min(x,page.ClientSize.Width-popup.Width-4));y=Math.Max(4,Math.Min(y,page.ClientSize.Height-popup.Height-4));popup.Location=new Point(x,y);UpdateEditorConnector();popup.BringToFront();
         }
-        void UpdateEditorConnector(){if(editorConnector==null||popupPage==null||!popup.Visible)return;Point start=new Point(popupTargetBounds.Right,popupTargetBounds.Top+popupTargetBounds.Height/2);if(popup.Left<popupTargetBounds.Left)start.X=popupTargetBounds.Left;else if(popup.Top>popupTargetBounds.Bottom)start=new Point(popupTargetBounds.Left+popupTargetBounds.Width/2,popupTargetBounds.Bottom);else if(popup.Bottom<popupTargetBounds.Top)start=new Point(popupTargetBounds.Left+popupTargetBounds.Width/2,popupTargetBounds.Top);Point end=new Point(Math.Max(popup.Left,Math.Min(start.X,popup.Right)),Math.Max(popup.Top,Math.Min(start.Y,popup.Bottom)));if(popup.Bounds.Contains(start)){end=popup.Left>=popupTargetBounds.Right?new Point(popup.Left,popup.Top+popup.Height/2):popup.Top>=popupTargetBounds.Bottom?new Point(popup.Left+popup.Width/2,popup.Top):new Point(popup.Right,popup.Top+popup.Height/2);}editorConnector.Start=start;editorConnector.End=end;editorConnector.Visible=false;editorConnector.Invalidate();}
+        void HideEditorConnector(){if(popupPage!=null)popupPage.ClearConnector(popup);}
+        void UpdateEditorConnector(){if(popupPage==null||!popup.Visible){HideEditorConnector();return;}Point start=new Point(popupTargetBounds.Right,popupTargetBounds.Top+popupTargetBounds.Height/2);if(popup.Left<popupTargetBounds.Left)start.X=popupTargetBounds.Left;else if(popup.Top>popupTargetBounds.Bottom)start=new Point(popupTargetBounds.Left+popupTargetBounds.Width/2,popupTargetBounds.Bottom);else if(popup.Bottom<popupTargetBounds.Top)start=new Point(popupTargetBounds.Left+popupTargetBounds.Width/2,popupTargetBounds.Top);Point end=new Point(Math.Max(popup.Left,Math.Min(start.X,popup.Right)),Math.Max(popup.Top,Math.Min(start.Y,popup.Bottom)));if(popup.Bounds.Contains(start)){end=popup.Left>=popupTargetBounds.Right?new Point(popup.Left,popup.Top+popup.Height/2):popup.Top>=popupTargetBounds.Bottom?new Point(popup.Left+popup.Width/2,popup.Top):new Point(popup.Right,popup.Top+popup.Height/2);}popupPage.SetConnector(popup,start,end);}
         void ShowAnnotationPopup(PdfCanvas canvas,float x,float y,float w,float h) { popupHeading.Text="添加批注";quoteBox.Text=selectedPdfText;quoteBox.ReadOnly=false;noteBox.ReadOnly=false;kindBox.Enabled=true;popupSave.Visible=true;popup.Visible=true;popupX=x;popupY=y;popupW=w;popupH=h;PlacePopup(canvas,canvas.AnchorBounds(x,y,w,h));noteBox.Focus(); }
         float CanvasScale(PdfCanvas canvas)
         {
@@ -526,6 +526,7 @@ namespace PaperNote
         }
         void RemoveMarkConnector(Mark mark,PdfCanvas canvas)
         {
+            if(canvas!=null)canvas.ClearConnector(mark);
             ConnectorLayer line;if(!markCardLines.TryGetValue(mark,out line))return;
             line.RemoveSegment(mark);markCardLines.Remove(mark);
             if(line.SegmentCount==0){canvas.Controls.Remove(line);line.Dispose();pageConnectorLayers.Remove(canvas);}
@@ -544,6 +545,12 @@ namespace PaperNote
                 if(target.Left+target.Width/2<document.Left+document.Width/2){add(document.Left-width-gap,cy+dy);add(document.Right+gap,cy+dy);}
                 else{add(document.Right+gap,cy+dy);add(document.Left-width-gap,cy+dy);}
             }
+            // Places beside the annotation itself, so the callout never covers its own quote and
+            // the leader line stays short.
+            add(target.Right+gap,target.Top+(target.Height-height)/2);
+            add(target.Left-width-gap,target.Top+(target.Height-height)/2);
+            add(target.Left+(target.Width-width)/2,target.Bottom+gap);
+            add(target.Left+(target.Width-width)/2,target.Top-height-gap);
             Rectangle best=Rectangle.Empty;double bestScore=Double.MaxValue;
             foreach(Point candidate in candidates)
             {
@@ -553,10 +560,12 @@ namespace PaperNote
                     PdfCanvas page;if(entry.Key==mark||!entry.Value.Visible||!markCardPages.TryGetValue(entry.Key,out page)||page!=canvas)continue;
                     Rectangle intersection=Rectangle.Intersect(r,entry.Value.Bounds);overlap+=(double)intersection.Width*intersection.Height;
                 }
+                Rectangle covered=Rectangle.Intersect(r,target);
+                double covering=(double)covered.Width*covered.Height;
                 double distance=Math.Abs(candidate.X-cx)+Math.Abs(candidate.Y-cy);
-                double score=overlap*1000+distance;
+                double score=(overlap+covering*2)*1000+distance;
                 if(score<bestScore){bestScore=score;best=r;}
-                if(overlap==0)break;
+                if(overlap==0&&covering==0)break;
             }
             return best.IsEmpty?new Point(4,4):best.Location;
         }
@@ -589,8 +598,11 @@ namespace PaperNote
             Panel existing;
             if(markCards.TryGetValue(mark,out existing))
             {
-                bool open=!existing.Visible;existing.Visible=open;
-                if(open){existing.BringToFront();Panel surface=existing.Controls.OfType<Panel>().FirstOrDefault(delegate(Panel p){return String.Equals(p.Tag as string,"mark-card-editor",StringComparison.Ordinal);});TextBox editor=surface==null?existing.Controls.OfType<TextBox>().FirstOrDefault():surface.Controls.OfType<TextBox>().FirstOrDefault();if(editor!=null){editor.Tag=editor.Text;editor.Focus();}}
+                // Clicking the annotation again shows its callout instead of toggling it, so a
+                // double click can no longer open and immediately close the card.
+                existing.Visible=true;existing.BringToFront();
+                Panel surface=existing.Controls.OfType<Panel>().FirstOrDefault(delegate(Panel p){return String.Equals(p.Tag as string,"mark-card-editor",StringComparison.Ordinal);});TextBox editor=surface==null?existing.Controls.OfType<TextBox>().FirstOrDefault():surface.Controls.OfType<TextBox>().FirstOrDefault();if(editor!=null){editor.Tag=editor.Text;editor.Focus();}
+                ConnectorLayer reopened;if(markCardLines.TryGetValue(mark,out reopened))UpdateMarkConnector(mark,canvas.AnchorBounds(mark.X,mark.Y,mark.W,mark.H),existing,reopened);
                 canvas.Invalidate();return;
             }
             Rectangle target=canvas.AnchorBounds(mark.X,mark.Y,mark.W,mark.H);string body=mark.Note??"";
@@ -611,7 +623,7 @@ namespace PaperNote
             var publishButton=new Button{Text="发布",FlatStyle=FlatStyle.Flat,BackColor=Color.White,ForeColor=Color.FromArgb(26,115,232),Cursor=Cursors.Hand,TabStop=false,Tag="mark-card-publish"};publishButton.FlatAppearance.BorderSize=0;
             editorSurface.Controls.Add(text);editorSurface.Controls.Add(cancelButton);editorSurface.Controls.Add(publishButton);
             var emptyTimer=new Timer{Interval=650};card.Disposed+=delegate{try{emptyTimer.Stop();emptyTimer.Dispose();}catch{}};emptyTimer.Tick+=delegate{emptyTimer.Stop();if(!text.IsDisposed&&String.IsNullOrWhiteSpace(text.Text)){Paper owner=null;foreach(Paper p in library.Papers)if(p.Marks!=null&&p.Marks.Contains(mark)){owner=p;break;}if(owner!=null)owner.Marks.Remove(mark);canvas.Invalidate();canvas.Controls.Remove(card);RemoveMarkConnector(mark,canvas);markCards.Remove(mark);markCardPages.Remove(mark);markCardScales.Remove(mark);card.Dispose();SaveLibrary();}};
-            Action close=delegate{card.Visible=false;canvas.Invalidate();SaveLibrary();};
+            Action close=delegate{card.Visible=false;canvas.ClearConnector(mark);canvas.Invalidate();SaveLibrary();};
             cancelButton.Click+=delegate{string savedBody=text.Tag as string??"";if(!String.Equals(text.Text,savedBody,StringComparison.Ordinal)){text.Text=savedBody;mark.Note=savedBody;}emptyTimer.Stop();close();};
             publishButton.Click+=delegate{text.Tag=text.Text;mark.Note=text.Text;close();};
             text.TextChanged+=delegate{mark.Note=text.Text;mark.CardPixelW=card.Width;mark.CardPixelH=card.Height;card.Invalidate();canvas.Invalidate(Rectangle.Inflate(card.Bounds,8,8));ConnectorLayer activeLine;if(markCardLines.TryGetValue(mark,out activeLine))UpdateMarkConnector(mark,target,card,activeLine);SaveLibrary();if(String.IsNullOrWhiteSpace(text.Text))emptyTimer.Start();else emptyTimer.Stop();};
@@ -621,8 +633,14 @@ namespace PaperNote
             MouseEventHandler up=delegate(object s,MouseEventArgs e){if(moving&&(e.Button==MouseButtons.Left||e.Button==MouseButtons.None)){moving=false;Control dragSurface=s as Control;if(dragSurface!=null)dragSurface.Capture=false;canvas.Invalidate();SaveLibrary();}};
             header.MouseDown+=down;header.MouseMove+=move;header.MouseUp+=up;foreach(Label label in header.Controls.OfType<Label>()){label.MouseDown+=down;label.MouseMove+=move;label.MouseUp+=up;}
             card.MouseWheel+=ReaderWheel;text.MouseWheel+=ReaderWheel;
-            ConnectorLayer line;if(!pageConnectorLayers.TryGetValue(canvas,out line)){line=new ConnectorLayer{Dock=DockStyle.Fill};canvas.Controls.Add(line);pageConnectorLayers[canvas]=line;}
-            markCardLines[mark]=line;UpdateMarkConnector(mark,target,card,line);card.Controls.Add(header);card.Controls.Add(editorSurface);AddResizeHandlers(card,text,canvas,mark);ScaleMarkCardContents(card,1f,MarkTextFontPoints(canvas,1f));markCards[mark]=card;markCardPages[mark]=canvas;canvas.Controls.Add(card);RaiseCalloutLayers(canvas);
+            // Assemble the card completely before it is put on the page, then draw the leader
+            // line once it is registered, so opening shows one frame instead of a sequence of
+            // partial ones.
+            card.Controls.Add(header);card.Controls.Add(editorSurface);AddResizeHandlers(card,text,canvas,mark);ScaleMarkCardContents(card,1f,MarkTextFontPoints(canvas,1f));
+            markCards[mark]=card;markCardPages[mark]=canvas;
+            ConnectorLayer line;if(!pageConnectorLayers.TryGetValue(canvas,out line)){line=new ConnectorLayer{Dock=DockStyle.Fill,Visible=false};canvas.Controls.Add(line);pageConnectorLayers[canvas]=line;}
+            markCardLines[mark]=line;UpdateMarkConnector(mark,target,card,line);
+            canvas.Controls.Add(card);RaiseCalloutLayers(canvas);
         }
         void HandleMarkPopupFailure(Mark mark,PdfCanvas canvas,Exception error)
         {
@@ -637,7 +655,8 @@ namespace PaperNote
             int sx,sy,ex,ey;Point tc=new Point(target.Left+target.Width/2,target.Top+target.Height/2),cc=new Point(card.Left+card.Width/2,card.Top+card.Height/2);
             if(Math.Abs(cc.X-tc.X)>=Math.Abs(cc.Y-tc.Y)){if(cc.X>=tc.X){sx=target.Right;sy=tc.Y;ex=card.Left;ey=Math.Max(card.Top,Math.Min(sy,card.Bottom));}else{sx=target.Left;sy=tc.Y;ex=card.Right;ey=Math.Max(card.Top,Math.Min(sy,card.Bottom));}}
             else if(cc.Y>=tc.Y){sx=tc.X;sy=target.Bottom;ex=Math.Max(card.Left,Math.Min(sx,card.Right));ey=card.Top;}else{sx=tc.X;sy=target.Top;ex=Math.Max(card.Left,Math.Min(sx,card.Right));ey=card.Bottom;}
-            line.SetSegment(mark,new Point(sx,sy),new Point(ex,ey));line.Visible=false;
+            PdfCanvas page;
+            if(markCardPages.TryGetValue(mark,out page)&&page!=null)page.SetConnector(mark,new Point(sx,sy),new Point(ex,ey));
         }
         void FlashMarkCard(Mark mark,Panel card)
         {
@@ -1584,9 +1603,9 @@ namespace PaperNote
             canvas.DocumentTextDragStarted+=delegate(int word,Point screen){StartCrossPageDrag(page,word);};
             canvas.DocumentTextDragMoved+=delegate(Point screen){return UpdateCrossPageDrag(screen);};
             canvas.DocumentTextDragEnded+=delegate(Point screen,bool crossed){return EndCrossPageDrag(screen,crossed);};
-            canvas.RegionSelected+=delegate(float x,float y,float w,float h){ClearCrossPageSelection();if(selectedPdfCanvas!=null&&selectedPdfCanvas!=canvas)selectedPdfCanvas.ClearDraft();currentPage=page;pdfCanvas=canvas;pageBox.Text=page.ToString();kindBox.SelectedItem="高亮";selectedPdfCanvas=canvas;selectedPdfText=canvas.SelectedText??"";quoteBox.Clear();noteBox.Clear();if(popupPage==canvas){popup.Visible=false;if(editorConnector!=null)editorConnector.Visible=false;}};
+            canvas.RegionSelected+=delegate(float x,float y,float w,float h){ClearCrossPageSelection();if(selectedPdfCanvas!=null&&selectedPdfCanvas!=canvas)selectedPdfCanvas.ClearDraft();currentPage=page;pdfCanvas=canvas;pageBox.Text=page.ToString();kindBox.SelectedItem="高亮";selectedPdfCanvas=canvas;selectedPdfText=canvas.SelectedText??"";quoteBox.Clear();noteBox.Clear();if(popupPage==canvas){popup.Visible=false;HideEditorConnector();}};
             canvas.SelectionActivated+=delegate(float x,float y,float w,float h){currentPage=page;pdfCanvas=canvas;pageBox.Text=page.ToString();kindBox.SelectedItem="高亮";ShowAnnotationPopup(canvas,x,y,w,h);};
-            canvas.SelectionCleared+=delegate{ClearCrossPageSelection();if(selectedPdfCanvas!=null){PdfCanvas old=selectedPdfCanvas;selectedPdfText="";selectedPdfCanvas=null;quoteBox.Clear();if(popup.Visible){popup.Visible=false;if(editorConnector!=null)editorConnector.Visible=false;noteBox.Clear();}if(old!=canvas)old.ClearDraft();}};
+            canvas.SelectionCleared+=delegate{ClearCrossPageSelection();if(selectedPdfCanvas!=null){PdfCanvas old=selectedPdfCanvas;selectedPdfText="";selectedPdfCanvas=null;quoteBox.Clear();if(popup.Visible){popup.Visible=false;HideEditorConnector();noteBox.Clear();}if(old!=canvas)old.ClearDraft();}};
             canvas.Resize+=delegate{RepositionPageCallouts(canvas);};return canvas;
         }
         void AddPage(int page,Image image,int total,int dpi)
@@ -1645,7 +1664,7 @@ namespace PaperNote
             float x, y, w, h; pdfCanvas.GetDraft(out x, out y, out w, out h);
             int overlaps = 0; foreach (Mark old in current.Marks) if (old.Page == page && Intersects(x,y,w,h,old.X,old.Y,old.W,old.H)) overlaps++;
             var m = new Mark { Page = page, Kind = kindBox.SelectedItem.ToString(), Quote = quoteBox.Text.Trim(), Note = noteBox.Text.Trim(), Created = DateTime.Now.ToString("s"), X = x, Y = y, W = w, H = h, ColorIndex = overlaps % 5 };
-            current.Marks.Add(m); marks.Items.Add(m); quoteBox.Clear();noteBox.Clear(); pdfCanvas.ClearDraft(); pdfCanvas.Invalidate(); popup.Visible = false;if(editorConnector!=null)editorConnector.Visible=false; SaveLibrary();
+            current.Marks.Add(m); marks.Items.Add(m); quoteBox.Clear();noteBox.Clear(); pdfCanvas.ClearDraft(); pdfCanvas.Invalidate(); popup.Visible = false;HideEditorConnector(); SaveLibrary();
         }
         void DeleteMark(object sender, EventArgs e)
         {
@@ -1675,6 +1694,7 @@ namespace PaperNote
         Bitmap regionImage;
         RectangleF regionBounds;
         int regionDpi;
+        Dictionary<object,Point[]> connectors=new Dictionary<object,Point[]>();
         List<RectangleF> draftWords;
         List<RectangleF> previewWords;
         List<MainForm.WordBox> pageWords=new List<MainForm.WordBox>();
@@ -1703,6 +1723,34 @@ namespace PaperNote
             selectionLines=BuildSelectionLines(next);Point p=PointToClient(Cursor.Position);if(ClientRectangle.Contains(p))Cursor=HitDraft(p)||HitMark(p)?Cursors.Hand:Cursors.IBeam;Invalidate();
         }
         public float EstimatedPdfGlyphHeightPixels(){RectangleF bounds=ImageBounds();return medianWordHeightNormalized>0&&bounds.Height>0?medianWordHeightNormalized*bounds.Height:0;}
+        // Leader lines drawn by the page itself, from a mark to the callout that belongs to it.
+        // Drawing them here keeps them under the callout windows and out of a separate control
+        // that would have to span the whole page.
+        public void SetConnector(object key,Point start,Point end)
+        {
+            Point[] previous;
+            Rectangle stale=connectors.TryGetValue(key,out previous)?ConnectorBounds(previous):Rectangle.Empty;
+            connectors[key]=new Point[]{start,end};
+            Rectangle area=Rectangle.Union(stale,ConnectorBounds(new Point[]{start,end}));
+            if(area.IsEmpty)Invalidate();else Invalidate(Rectangle.Inflate(area,10,10));
+        }
+        public void ClearConnector(object key)
+        {
+            Point[] previous;
+            if(!connectors.TryGetValue(key,out previous))return;
+            connectors.Remove(key);
+            Invalidate(Rectangle.Inflate(ConnectorBounds(previous),10,10));
+        }
+        public void ClearConnectors()
+        {
+            if(connectors.Count==0)return;
+            connectors.Clear();Invalidate();
+        }
+        static Rectangle ConnectorBounds(Point[] segment)
+        {
+            if(segment==null||segment.Length<2)return Rectangle.Empty;
+            return Rectangle.FromLTRB(Math.Min(segment[0].X,segment[1].X),Math.Min(segment[0].Y,segment[1].Y),Math.Max(segment[0].X,segment[1].X),Math.Max(segment[0].Y,segment[1].Y));
+        }
         public void SetDraft(float x, float y, float w, float h) { draft = new RectangleF(x,y,w,h);draftWords=null;hasDraft = w > 0 && h > 0; Invalidate(); }
         public void GetDraft(out float x, out float y, out float w, out float h) { x = draft.X; y = draft.Y; w = draft.Width; h = draft.Height; }
         public Point AnchorPoint(float x,float y,float w,float h,Control target) { RectangleF b=ImageBounds();Point screen=PointToScreen(new Point((int)(b.X+(x+w/2f)*b.Width),(int)(b.Y+(y+h/2f)*b.Height)));return target.PointToClient(screen); }
@@ -2095,6 +2143,17 @@ namespace PaperNote
                 if(dragging&&previewWords!=null)foreach(RectangleF word in previewWords)g.FillRectangle(brush,b.X+word.X*b.Width,b.Y+word.Y*b.Height,word.Width*b.Width,word.Height*b.Height);
             }
             if(hasImageRegion){RectangleF r=new RectangleF(b.X+imageRegion.X*b.Width,b.Y+imageRegion.Y*b.Height,imageRegion.Width*b.Width,imageRegion.Height*b.Height);using(var pen=new Pen(Color.FromArgb(230,66,133,244),2)){pen.DashStyle=DashStyle.Dash;g.DrawRectangle(pen,r.X,r.Y,r.Width,r.Height);}}
+            if(connectors.Count>0)
+            {
+                using(var pen=new Pen(Color.FromArgb(220,198,40,40),2))using(var dot=new SolidBrush(Color.FromArgb(220,198,40,40)))
+                    foreach(Point[] segment in connectors.Values)
+                    {
+                        if(segment==null||segment.Length<2)continue;
+                        g.DrawLine(pen,segment[0],segment[1]);
+                        g.FillEllipse(dot,segment[0].X-3,segment[0].Y-3,6,6);
+                        g.FillEllipse(dot,segment[1].X-3,segment[1].Y-3,6,6);
+                    }
+            }
             if(dragging&&previewImageRegion){RectangleF r=RectangleF.Intersect(Normalize(start,end),b);if(r.Width>0&&r.Height>0)using(var pen=new Pen(Color.FromArgb(230,66,133,244),2)){pen.DashStyle=DashStyle.Dash;g.DrawRectangle(pen,r.X,r.Y,r.Width,r.Height);}}
             if(hasCaret&&caretVisible&&caretWordIndex>=0&&caretWordIndex<pageWords.Count)
             {
