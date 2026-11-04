@@ -1,4 +1,7 @@
 <Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <BaseIntermediateOutputPath>$(MSBuildThisFileDirectory)..\.build\obj\</BaseIntermediateOutputPath>
+  </PropertyGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.Common.props" Condition="Exists('$(MSBuildToolsPath)\Microsoft.Common.props')" />
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Release</Configuration>
@@ -7,6 +10,7 @@
     <OutputType>WinExe</OutputType>
     <RootNamespace>PaperNote</RootNamespace>
     <AssemblyName>PaperNote-PDFium</AssemblyName>
+    <ApplicationIcon>assets\papernote-logo.ico</ApplicationIcon>
     <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <LangVersion>latest</LangVersion>
@@ -14,7 +18,7 @@
     <Prefer32Bit>false</Prefer32Bit>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
     <GenerateBindingRedirectsOutputType>true</GenerateBindingRedirectsOutputType>
-    <OutputPath>$(MSBuildProjectDirectory)\.build\bin\$(Configuration)\</OutputPath>
+    <OutputPath>$(MSBuildProjectDirectory)\..\.build\bin\$(Configuration)\</OutputPath>
     <RestoreProjectStyle>PackageReference</RestoreProjectStyle>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
@@ -29,6 +33,11 @@
   <ItemGroup>
     <Compile Include="PaperNote.cs" />
     <Compile Include="PdfiumEngine.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="assets\papernote-logo.png">
+      <LogicalName>PaperNote.assets.papernote-logo.png</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="All" />

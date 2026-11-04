@@ -2,10 +2,11 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = $PSScriptRoot
 Set-Location $projectRoot
 
-$project = Join-Path $projectRoot 'PaperNote.csproj'
+$project = Join-Path $projectRoot 'src\PaperNote.csproj'
 $outputDir = Join-Path $projectRoot '.build\bin\Release'
-$runtimeDir = Join-Path $projectRoot 'PaperNoteRuntime-PDFium'
+$publishDir = Join-Path $projectRoot 'dist'
 $packagesDir = Join-Path $projectRoot '.build\packages'
+New-Item -ItemType Directory -Force -Path $publishDir | Out-Null
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 if (-not (Test-Path $vswhere)) { throw 'Visual Studio 2022 MSBuild was not found.' }
 $vsInstall = & $vswhere -latest -products '*' -requires Microsoft.Component.MSBuild -property installationPath
@@ -23,18 +24,18 @@ $redistRoot = Join-Path $vsInstall 'VC\Redist\MSVC'
 $exeName = 'PaperNote-PDFium.exe'
 $runtimeName = 'PaperNoteRuntime-PDFium'
 try {
-    Copy-Item -LiteralPath $exe -Destination (Join-Path $projectRoot $exeName) -Force
-    if (Test-Path $config) { Copy-Item -LiteralPath $config -Destination (Join-Path $projectRoot ($exeName + '.config')) -Force }
+    Copy-Item -LiteralPath $exe -Destination (Join-Path $publishDir $exeName) -Force
+    if (Test-Path $config) { Copy-Item -LiteralPath $config -Destination (Join-Path $publishDir ($exeName + '.config')) -Force }
 } catch {
     $versionSuffix = '-Updated-' + (Get-Date -Format 'yyyyMMdd-HHmmss')
     Write-Warning "The current executable is in use; publishing the update as PaperNote-PDFium$versionSuffix.exe."
     $exeName = 'PaperNote-PDFium' + $versionSuffix + '.exe'
     $runtimeName = 'PaperNoteRuntime-PDFium' + $versionSuffix
-    Copy-Item -LiteralPath $exe -Destination (Join-Path $projectRoot $exeName) -Force
-    if (Test-Path $config) { Copy-Item -LiteralPath $config -Destination (Join-Path $projectRoot ($exeName + '.config')) -Force }
+    Copy-Item -LiteralPath $exe -Destination (Join-Path $publishDir $exeName) -Force
+    if (Test-Path $config) { Copy-Item -LiteralPath $config -Destination (Join-Path $publishDir ($exeName + '.config')) -Force }
 }
 
-$runtimeDir = Join-Path $projectRoot $runtimeName
+$runtimeDir = Join-Path $publishDir $runtimeName
 New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
 Get-ChildItem -LiteralPath $outputDir -Filter '*.dll' -File | Copy-Item -Destination $runtimeDir -Force
 $pdfiumDll = Join-Path $outputDir 'x64\pdfium.dll'
@@ -44,4 +45,4 @@ if (Test-Path $redistRoot) {
     $crtFolder = Get-ChildItem -LiteralPath $redistRoot -Directory | Sort-Object Name -Descending | ForEach-Object { Join-Path $_.FullName 'x64\Microsoft.VC143.CRT' } | Where-Object { Test-Path $_ } | Select-Object -First 1
     if ($crtFolder) { Get-ChildItem -LiteralPath $crtFolder -Filter '*.dll' -File | Copy-Item -Destination $runtimeDir -Force }
 }
-Write-Host "Built $exeName. Keep the adjacent $runtimeName folder with the executable."
+Write-Host "Built dist\$exeName. Keep the adjacent $runtimeName folder with the executable."

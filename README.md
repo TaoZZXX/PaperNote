@@ -1,15 +1,55 @@
 # PaperNote
 
-PaperNote is a local-first Windows PDF reader and paper annotation app. It uses PDFium for page rendering and text geometry. Pages are loaded on demand and every zoom level gets the resolution it needs: each page is re-rendered as the zoom changes, and once a whole-page bitmap would grow past its memory budget only the visible window is re-rasterized at the current screen resolution, so detail keeps improving instead of the page being stretched. The page cache and bounded background workers keep long PDFs from being loaded into memory all at once.
+PaperNote 是面向科研阅读的 Windows PDF 阅读与批注工具，采用本地优先的方式管理论文、阅读进度和批注。PDF 页面由 PDFium 按需渲染，阅读器通过有限的页面缓存和后台任务处理长文档。
 
-Run `PaperNote-PDFium.exe` from this folder and keep the adjacent `PaperNoteRuntime-PDFium` directory with it. Import a PDF or select an existing paper, scroll continuously between pages, and use Ctrl+wheel to zoom. Drag over selectable text to highlight and annotate; continue the same drag onto another page to select across pages. The reader auto-scrolls when the pointer reaches the top or bottom edge. Ctrl+C copies selected text as plain text, including across pages; Ctrl+Shift+C copies the extracted selection as LaTeX text. Text selection never adds a rendered page image to the clipboard. Hold Ctrl and drag with the left mouse button to immediately copy a clean screenshot of the framed PDF region; it excludes the blue selection overlay. The context menu also offers direct extraction of an embedded PDF image object. The paper list and annotations are stored in `%LOCALAPPDATA%\PaperNote\library.json`.
+## 主要功能
 
-## Build
+- 导入并管理多篇 PDF 论文，按最近打开时间排序。
+- 连续滚动阅读、缩放 PDF，并跳转到指定页码。
+- 选择文字并跨页复制；可复制纯文本或 LaTeX 文本。
+- 在 PDF 页面上创建、编辑和拖动批注。
+- 保存论文总结和页面尺寸缓存。
+- 使用 `Ctrl+B` 打开论文列表和论文总结面板。
+- 顶部品牌标识与 Windows 应用图标使用同一套论文便签图案，底色与 PDF 阅读区一致。
 
-On Windows, install Visual Studio 2022 MSBuild and use a network connection for the first NuGet restore, then run:
+## 运行
+
+运行 `dist` 目录中的 `PaperNote-PDFium.exe`。请将与它同目录的 `PaperNoteRuntime-PDFium` 文件夹一并保留，其中包含 PDFium 和应用所需的运行库。
+
+论文库和批注默认保存在：
+
+```text
+%LOCALAPPDATA%\PaperNote\library.json
+```
+
+## 构建
+
+需要 Windows、Visual Studio 2022（含 MSBuild）和 .NET Framework 4.8 目标包。首次还原 NuGet 依赖时需要网络连接。在项目根目录运行：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
-The project includes the .NET Framework 4.8 reference assemblies as a build dependency. The script restores the x64 PDFium binary package, builds the WinForms app, and copies `pdfium.dll` plus managed dependencies into `PaperNoteRuntime-PDFium`. PDFium APIs are serialized through one engine lock, as the upstream API is not thread-safe. PDFium is distributed under BSD-style licensing; the binary package and source notices are available from [pdfium-binaries](https://github.com/bblanchon/pdfium-binaries) and [PDFium](https://pdfium.googlesource.com/pdfium/).
+程序和运行库会生成到 `dist`。第三方组件及许可见 `THIRD-PARTY-NOTICES.md` 和 `LICENSES/`；当前 PDFium NuGet 包声明为 Apache-2.0，PDFium 上游还包含 BSD 风格许可条款。上游信息见 [pdfium-binaries](https://github.com/bblanchon/pdfium-binaries) 与 [PDFium](https://pdfium.googlesource.com/pdfium/)。
+
+## 发布
+
+PaperNote 自身使用 MIT 许可，完整文本见项目根目录的 `LICENSE`。运行以下命令生成发布包：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\release.ps1
+```
+
+脚本会构建程序，并生成 `release\PaperNote.zip`，其中包含程序、PDFium/VC++运行库、README 和许可证文件，不包含本机论文库数据。
+
+## 目录结构
+
+```text
+PaperNote/
+├── src/                    C# 源码、项目文件、图标和 NuGet 锁定文件
+├── dist/                   构建生成的 exe 和运行库
+├── .build/                 MSBuild 输出与 NuGet 缓存
+├── build.ps1               Windows 构建脚本
+├── .clang-format            C# 代码格式规则
+└── README.md               项目说明
+```

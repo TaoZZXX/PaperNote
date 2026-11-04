@@ -1,0 +1,12 @@
+BasedOnStyle: Microsoft
+Language: CSharp
+IndentWidth: 4
+ContinuationIndentWidth: 4
+ColumnLimit: 120
+NamespaceIndentation: All
+BreakBeforeBraces: Allman
+AllowShortBlocksOnASingleLine: Empty
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: false
