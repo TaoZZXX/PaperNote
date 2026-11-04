@@ -1690,9 +1690,9 @@ namespace PaperNote
         public string SelectedText { get; private set; }
         public bool HasImageRegion { get { return hasImageRegion; } }
         public RectangleF SelectedImageRegion { get { return imageRegion; } }
-        public PdfCanvas() { DoubleBuffered = true; SizeMode = PictureBoxSizeMode.Zoom; Cursor = Cursors.IBeam;TabStop=true;SetStyle(ControlStyles.Selectable,true);caretBlinkTimer=new Timer{Interval=530};caretBlinkTimer.Tick+=delegate{if(!hasCaret){caretBlinkTimer.Stop();return;}caretVisible=!caretVisible;Invalidate();}; }
+        public PdfCanvas() { DoubleBuffered = false; SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint,true); SizeMode = PictureBoxSizeMode.Zoom; Cursor = Cursors.IBeam;TabStop=true;SetStyle(ControlStyles.Selectable,true);caretBlinkTimer=new Timer{Interval=530};caretBlinkTimer.Tick+=delegate{if(!hasCaret){caretBlinkTimer.Stop();return;}caretVisible=!caretVisible;Invalidate();}; }
         void RestartCaretBlink(){caretVisible=true;if(caretBlinkTimer!=null){caretBlinkTimer.Stop();caretBlinkTimer.Start();}Invalidate();}
-        protected override void Dispose(bool disposing){if(disposing){ClearRegion();if(caretBlinkTimer!=null){caretBlinkTimer.Stop();caretBlinkTimer.Dispose();caretBlinkTimer=null;}}base.Dispose(disposing);}
+        protected override void Dispose(bool disposing){if(disposing){ClearRegion();ReleasePaintBuffer();if(caretBlinkTimer!=null){caretBlinkTimer.Stop();caretBlinkTimer.Dispose();caretBlinkTimer=null;}}base.Dispose(disposing);}
         public void SetMarksProvider(Func<List<Mark>> provider) { getMarks = provider; }
         public void SetTextLayout(List<MainForm.WordBox> words)
         {
@@ -1952,33 +1952,157 @@ namespace PaperNote
         }
         bool HitMark(Point p) { return FindMarkAt(p)!=null; }
         Mark FindMarkAt(Point p) { if(getMarks==null)return null;RectangleF b=ImageBounds();if(b.Width<=0)return null;List<Mark> list=getMarks();if(list==null)return null;for(int i=list.Count-1;i>=0;i--){Mark m=list[i];if(m.W>0&&m.H>0){RectangleF r=new RectangleF(b.X+m.X*b.Width,b.Y+m.Y*b.Height,m.W*b.Width,m.H*b.Height);if(r.Contains(p))return m;}}return null; }
+        public static double PaintSetupMs, PaintDrawMs, PaintBlitMs, PaintClearMs, PaintBaseMs, PaintTileMs;
+        IntPtr paintDc, paintHBitmap, paintBits;
+        int paintWidth, paintHeight;
+        [DllImport("gdi32.dll")] static extern bool BitBlt(IntPtr dest,int x,int y,int width,int height,IntPtr source,int sourceX,int sourceY,int rop);
+        [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+        [DllImport("gdi32.dll")] static extern IntPtr SelectObject(IntPtr hdc,IntPtr obj);
+        [DllImport("gdi32.dll")] static extern bool DeleteDC(IntPtr hdc);
+        [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr obj);
+        [DllImport("gdi32.dll")] static extern IntPtr CreateDIBSection(IntPtr hdc,ref BitmapInfoHeader header,uint usage,out IntPtr bits,IntPtr section,uint offset);
+        [StructLayout(LayoutKind.Sequential)] struct BitmapInfoHeader
+        {
+            public uint Size; public int Width; public int Height; public ushort Planes; public ushort BitCount;
+            public uint Compression; public uint SizeImage; public int XPelsPerMeter; public int YPelsPerMeter;
+            public uint ClrUsed; public uint ClrImportant;
+        }
+        const int SrcCopy=0x00CC0020;
+        // A DIB section we draw into with GDI+, then copy to the window with one GDI blit. The
+        // pixels live in memory we own, so what we drew is exactly what gets blitted; drawing
+        // straight into a window this large costs GDI+ tens of milliseconds per image.
+        void EnsurePaintBuffer(int width,int height)
+        {
+            if(paintDc!=IntPtr.Zero&&paintWidth==width&&paintHeight==height)return;
+            ReleasePaintBuffer();
+            var header=new BitmapInfoHeader{Size=(uint)Marshal.SizeOf(typeof(BitmapInfoHeader)),Width=width,Height=-height,Planes=1,BitCount=32,Compression=0};
+            paintDc=CreateCompatibleDC(IntPtr.Zero);
+            paintHBitmap=CreateDIBSection(paintDc,ref header,0,out paintBits,IntPtr.Zero,0);
+            if(paintHBitmap==IntPtr.Zero){DeleteDC(paintDc);paintDc=IntPtr.Zero;return;}
+            SelectObject(paintDc,paintHBitmap);
+            paintWidth=width;paintHeight=height;
+        }
+        void ReleasePaintBuffer()
+        {
+            if(paintHBitmap!=IntPtr.Zero){DeleteObject(paintHBitmap);paintHBitmap=IntPtr.Zero;}
+            if(paintDc!=IntPtr.Zero){DeleteDC(paintDc);paintDc=IntPtr.Zero;}
+            paintBits=IntPtr.Zero;paintWidth=paintHeight=0;
+        }
+        // Part of this control that its container actually shows. A page canvas is as tall as
+        // the whole page, so at high zoom only a window into it is on screen.
+        Rectangle VisibleArea()
+        {
+            Rectangle area = ClientRectangle;
+            Control parent = Parent;
+            if (parent != null)
+            {
+                int left = -Left, top = -Top;
+                area = Rectangle.Intersect(area, new Rectangle(left, top, parent.ClientSize.Width, parent.ClientSize.Height));
+            }
+            return area;
+        }
         protected override void OnPaint(PaintEventArgs e)
         {
-            base.OnPaint(e); RectangleF b = ImageBounds(); if (b.Width <= 0) return; List<Mark> all = getMarks == null ? null : getMarks();
+            // The base PictureBox paints by scaling the whole page bitmap into a client area that
+            // is tens of thousands of pixels across at high zoom; GDI+ stalls for seconds on that
+            // and on any image drawn straight into such a window, which is what made maximum zoom
+            // unusable. Here the visible slice is composed into a window-sized buffer and handed
+            // to the screen with a plain GDI blit, so cost follows the window, not the page.
+            Rectangle clip = Rectangle.Intersect(e.ClipRectangle, VisibleArea());
+            if (clip.Width <= 0 || clip.Height <= 0) return;
+            EnsurePaintBuffer(clip.Width, clip.Height);
+            if (paintDc == IntPtr.Zero) return;
+            using (Graphics g = Graphics.FromHdc(paintDc))
+            {
+                g.TranslateTransform(-clip.X, -clip.Y);
+                DrawPage(g, new RectangleF(clip.X, clip.Y, clip.Width, clip.Height));
+            }
+            IntPtr target = e.Graphics.GetHdc();
+            try { BitBlt(target, clip.X, clip.Y, clip.Width, clip.Height, paintDc, 0, 0, SrcCopy); }
+            finally { e.Graphics.ReleaseHdc(target); }
+        }
+        // Splits the area to paint around the tile, so the expensive upscaled page bitmap is only
+        // drawn where the sharp tile does not already cover it.
+        static List<RectangleF> Without(RectangleF area,RectangleF hole)
+        {
+            var parts=new List<RectangleF>();
+            if(area.Width<=0||area.Height<=0)return parts;
+            RectangleF overlap=RectangleF.Intersect(area,hole);
+            if(overlap.Width<=0||overlap.Height<=0){parts.Add(area);return parts;}
+            if(overlap.Top>area.Top)parts.Add(new RectangleF(area.X,area.Y,area.Width,overlap.Top-area.Top));
+            if(overlap.Bottom<area.Bottom)parts.Add(new RectangleF(area.X,overlap.Bottom,area.Width,area.Bottom-overlap.Bottom));
+            if(overlap.Left>area.Left)parts.Add(new RectangleF(area.X,overlap.Top,overlap.Left-area.X,overlap.Height));
+            if(overlap.Right<area.Right)parts.Add(new RectangleF(overlap.Right,overlap.Top,area.Right-overlap.Right,overlap.Height));
+            return parts;
+        }
+        void DrawPageSlice(Graphics g,RectangleF area,RectangleF page)
+        {
+            if(Image==null)return;
+            RectangleF visible=RectangleF.Intersect(page,area);
+            if(visible.Width<=0||visible.Height<=0)return;
+            float k=Image.Width/page.Width;
+            var source=new RectangleF((visible.X-page.X)*k,(visible.Y-page.Y)*k,visible.Width*k,visible.Height*k);
+            // The whole-page bitmap is heavily upscaled at high zoom; nearest-neighbour keeps that
+            // cheap, and it is only visible until the sharp tile for the same area arrives.
+            g.CompositingMode=CompositingMode.SourceCopy;
+            g.InterpolationMode=k<0.5f?InterpolationMode.Bilinear:InterpolationMode.NearestNeighbor;
+            g.PixelOffsetMode=PixelOffsetMode.HighSpeed;
+            g.DrawImage(Image,visible,source,GraphicsUnit.Pixel);
+            g.CompositingMode=CompositingMode.SourceOver;
+            g.InterpolationMode=InterpolationMode.Default;
+        }
+        void DrawPage(Graphics g, RectangleF clip)
+        {
+            g.Clear(Color.White);
+            RectangleF b = ImageBounds(); if (b.Width <= 0) return;
+            RectangleF tile = RectangleF.Empty;
+            if (regionImage != null && regionBounds.Width > 0 && regionBounds.Height > 0)
+                tile = new RectangleF(b.X+regionBounds.X*b.Width,b.Y+regionBounds.Y*b.Height,regionBounds.Width*b.Width,regionBounds.Height*b.Height);
+            if (Image != null)
+            {
+                foreach (RectangleF part in Without(clip, tile)) DrawPageSlice(g, part, b);
+            }
+
             if (regionImage != null && regionBounds.Width > 0 && regionBounds.Height > 0)
             {
                 var target = new RectangleF(b.X+regionBounds.X*b.Width,b.Y+regionBounds.Y*b.Height,regionBounds.Width*b.Width,regionBounds.Height*b.Height);
-                var previous = e.Graphics.InterpolationMode;
-                e.Graphics.InterpolationMode = InterpolationMode.HighQualityBilinear;
-                e.Graphics.DrawImage(regionImage, target);
-                e.Graphics.InterpolationMode = previous;
+                RectangleF shown = RectangleF.Intersect(target, clip);
+                if (shown.Width > 0 && shown.Height > 0)
+                {
+                    var source = new RectangleF((shown.X-target.X)*regionImage.Width/target.Width,(shown.Y-target.Y)*regionImage.Height/target.Height,shown.Width*regionImage.Width/target.Width,shown.Height*regionImage.Height/target.Height);
+                    // The tile was rendered for exactly this on-screen size, so it only needs a
+                    // copy; interpolating it here costs tens of milliseconds for no visible gain.
+                    Rectangle destination = Rectangle.Round(shown);
+                    Rectangle origin = Rectangle.Round(source);
+                    origin.Width = Math.Min(origin.Width, regionImage.Width - origin.X);
+                    origin.Height = Math.Min(origin.Height, regionImage.Height - origin.Y);
+                    destination.Width = Math.Min(destination.Width, origin.Width);
+                    destination.Height = Math.Min(destination.Height, origin.Height);
+                    InterpolationMode previous = g.InterpolationMode;
+                    g.CompositingMode=CompositingMode.SourceCopy;
+                    g.InterpolationMode = InterpolationMode.NearestNeighbor;
+                    if (destination.Width > 0 && destination.Height > 0) g.DrawImage(regionImage, destination, origin, GraphicsUnit.Pixel);
+                    g.InterpolationMode = previous;
+                    g.CompositingMode=CompositingMode.SourceOver;
+                }
             }
+            List<Mark> all = getMarks == null ? null : getMarks();
             Color[] palette = new Color[] { Color.FromArgb(255, 224, 130), Color.FromArgb(144, 202, 249), Color.FromArgb(225, 190, 231), Color.FromArgb(165, 214, 167), Color.FromArgb(255, 171, 145) };
-            if (all != null) foreach (Mark m in all) if (m.Page > 0 && m.W > 0 && m.H > 0) { RectangleF r = new RectangleF(b.X+m.X*b.Width,b.Y+m.Y*b.Height,m.W*b.Width,m.H*b.Height); Color c=palette[Math.Abs(m.ColorIndex)%palette.Length]; using (var brush = new SolidBrush(Color.FromArgb(105,c))) e.Graphics.FillRectangle(brush,r); using (var pen = new Pen(Color.FromArgb(190,c),1)) e.Graphics.DrawRectangle(pen,r.X,r.Y,r.Width,r.Height); }
+            if (all != null) foreach (Mark m in all) if (m.Page > 0 && m.W > 0 && m.H > 0) { RectangleF r = new RectangleF(b.X+m.X*b.Width,b.Y+m.Y*b.Height,m.W*b.Width,m.H*b.Height); Color c=palette[Math.Abs(m.ColorIndex)%palette.Length]; using (var brush = new SolidBrush(Color.FromArgb(105,c))) g.FillRectangle(brush,r); using (var pen = new Pen(Color.FromArgb(190,c),1)) g.DrawRectangle(pen,r.X,r.Y,r.Width,r.Height); }
             using(var brush=new SolidBrush(Color.FromArgb(150,66,133,244)))
             {
-                if(hasDraft&&draftWords!=null)foreach(RectangleF word in draftWords)e.Graphics.FillRectangle(brush,b.X+word.X*b.Width,b.Y+word.Y*b.Height,word.Width*b.Width,word.Height*b.Height);
-                if(dragging&&previewWords!=null)foreach(RectangleF word in previewWords)e.Graphics.FillRectangle(brush,b.X+word.X*b.Width,b.Y+word.Y*b.Height,word.Width*b.Width,word.Height*b.Height);
+                if(hasDraft&&draftWords!=null)foreach(RectangleF word in draftWords)g.FillRectangle(brush,b.X+word.X*b.Width,b.Y+word.Y*b.Height,word.Width*b.Width,word.Height*b.Height);
+                if(dragging&&previewWords!=null)foreach(RectangleF word in previewWords)g.FillRectangle(brush,b.X+word.X*b.Width,b.Y+word.Y*b.Height,word.Width*b.Width,word.Height*b.Height);
             }
-            if(hasImageRegion){RectangleF r=new RectangleF(b.X+imageRegion.X*b.Width,b.Y+imageRegion.Y*b.Height,imageRegion.Width*b.Width,imageRegion.Height*b.Height);using(var pen=new Pen(Color.FromArgb(230,66,133,244),2)){pen.DashStyle=DashStyle.Dash;e.Graphics.DrawRectangle(pen,r.X,r.Y,r.Width,r.Height);}}
-            if(dragging&&previewImageRegion){RectangleF r=RectangleF.Intersect(Normalize(start,end),b);if(r.Width>0&&r.Height>0)using(var pen=new Pen(Color.FromArgb(230,66,133,244),2)){pen.DashStyle=DashStyle.Dash;e.Graphics.DrawRectangle(pen,r.X,r.Y,r.Width,r.Height);}}
+            if(hasImageRegion){RectangleF r=new RectangleF(b.X+imageRegion.X*b.Width,b.Y+imageRegion.Y*b.Height,imageRegion.Width*b.Width,imageRegion.Height*b.Height);using(var pen=new Pen(Color.FromArgb(230,66,133,244),2)){pen.DashStyle=DashStyle.Dash;g.DrawRectangle(pen,r.X,r.Y,r.Width,r.Height);}}
+            if(dragging&&previewImageRegion){RectangleF r=RectangleF.Intersect(Normalize(start,end),b);if(r.Width>0&&r.Height>0)using(var pen=new Pen(Color.FromArgb(230,66,133,244),2)){pen.DashStyle=DashStyle.Dash;g.DrawRectangle(pen,r.X,r.Y,r.Width,r.Height);}}
             if(hasCaret&&caretVisible&&caretWordIndex>=0&&caretWordIndex<pageWords.Count)
             {
-                MainForm.WordBox word=pageWords[caretWordIndex];RectangleF r=new RectangleF(b.X+word.X1*b.Width,b.Y+word.Y1*b.Height,(word.X2-word.X1)*b.Width,(word.Y2-word.Y1)*b.Height);int len=Math.Max(1,(word.Text??"").Length);float caretGap=caretOffset==0?-2f:2f;float x=r.Left+r.Width*caretOffset/len+caretGap;using(var pen=new Pen(Color.Black,1f))e.Graphics.DrawLine(pen,x,r.Top,x,Math.Max(r.Top+3,r.Bottom));
+                MainForm.WordBox word=pageWords[caretWordIndex];RectangleF r=new RectangleF(b.X+word.X1*b.Width,b.Y+word.Y1*b.Height,(word.X2-word.X1)*b.Width,(word.Y2-word.Y1)*b.Height);int len=Math.Max(1,(word.Text??"").Length);float caretGap=caretOffset==0?-2f:2f;float x=r.Left+r.Width*caretOffset/len+caretGap;using(var pen=new Pen(Color.Black,1f))g.DrawLine(pen,x,r.Top,x,Math.Max(r.Top+3,r.Bottom));
             }
             else if(hasCaret&&caretVisible&&caretWordIndex<0)
             {
-                float x=b.X+caretNormX*b.Width+2f,y=b.Y+caretNormY*b.Height,h=Math.Max(16,b.Height*0.018f),top=Math.Max(b.Top,Math.Min(b.Bottom-h,y-h/2));using(var pen=new Pen(Color.Black,1f))e.Graphics.DrawLine(pen,x,top,x,top+h);
+                float x=b.X+caretNormX*b.Width+2f,y=b.Y+caretNormY*b.Height,h=Math.Max(16,b.Height*0.018f),top=Math.Max(b.Top,Math.Min(b.Bottom-h,y-h/2));using(var pen=new Pen(Color.Black,1f))g.DrawLine(pen,x,top,x,top+h);
             }
         }
     }
