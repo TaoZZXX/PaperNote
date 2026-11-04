@@ -162,8 +162,9 @@ namespace PaperNote
         const int PreviewDpi = 300, FullDpi = 600, MaxParallelLoadJobs = 8, MaxPrefetchPages = 4,
                   MaxRenderDimension = 2500;
         const int MaxFullPageDimension = 4096, RegionMarginPixels = 180, MaxCanvasSide = 30000,
-                  MaxRegionPixelSize = 6000;
+                  MaxRegionPixelSize = 18000;
         const long MaxFullPagePixels = 24000000L;
+        const long MaxHighResolutionRegionPixels = 150000000L;
         const float MinimumZoom = 0.08f;
         const float MarkCardMinimumVisibleScale = 0.32f;
         const int MarkCardDefaultWidth = 684, MarkCardDefaultHeight = 425, MarkCardMinimumWidth = 300,
@@ -3215,7 +3216,24 @@ int PageDpi(int page)
 // is measured in FullDpi units, so a scale of 1.0 means 600 device pixels per inch.
 int DisplayDpi(float scale)
 {
-    return Math.Max(72, (int)Math.Round(FullDpi * Math.Max(0.02f, scale)));
+    float fitScale = Math.Max(0.01f, FitScale());
+    float zoomPercent = Math.Max(1f, scale * 100f / fitScale);
+    // Preserve the existing sampling below 130% fit, then double the current
+    // supersampling curve through 550%. Keep the higher-scale cost capped beyond that.
+    float progress = Math.Max(0f, Math.Min(1f, (zoomPercent - 130f) / 420f));
+    float supersampling = zoomPercent < 130f ? 1f : 4f * (1.15f + 0.35f * progress);
+    if (zoomPercent >= 130f)
+    {
+        int viewportWidth = Math.Max(1, pdfViewport == null ? 1 : pdfViewport.ClientSize.Width),
+            viewportHeight = Math.Max(1, pdfViewport == null ? 1 : pdfViewport.ClientSize.Height);
+        double maxByDimension = Math.Min(MaxRegionPixelSize / (double)viewportWidth,
+                                         MaxRegionPixelSize / (double)viewportHeight),
+               maxByPixels = Math.Sqrt(MaxHighResolutionRegionPixels / ((double)viewportWidth * viewportHeight)) *
+                             0.98;
+        supersampling = Math.Min(supersampling,
+                                (float)Math.Max(1.0, Math.Min(maxByDimension, maxByPixels)));
+    }
+    return Math.Max(72, (int)Math.Round(FullDpi * Math.Max(0.02f, scale) * supersampling));
 }
 int MaxFullPageDpi(int page)
 {
@@ -3776,13 +3794,51 @@ void TrimPageCache(long byteBudget)
 }
 void TryUpgradeVisiblePage()
 {
-    if (resizingCanvas || current == null || pageCanvases.Count == 0 || activeLoadCount > 0 ||
-        DateTime.UtcNow.Subtract(lastViewportScroll).TotalMilliseconds < 650)
+    if (resizingCanvas || current == null || pageCanvases.Count == 0 || activeLoadCount > 0)
+        return;
+    float scale = fitMode ? FitScale() : zoomLevel;
+    int zoomPercent = Math.Max(1, (int)Math.Round(scale * 100f / Math.Max(0.01f, FitScale())));
+    double idleDelay = zoomPercent >= 130 ? 1000 : 650;
+    if (DateTime.UtcNow.Subtract(lastViewportScroll).TotalMilliseconds < idleDelay)
         return;
     int top = virtualScrollY, bottom = top + pdfViewport.ClientSize.Height, total;
     pageCounts.TryGetValue(current.FilePath, out total);
-    float scale = fitMode ? FitScale() : zoomLevel;
     int displayDpi = DisplayDpi(scale);
+    // At high zoom, sharpen what is on screen first. Rendering a whole page before
+    // its visible tile delays the only pixels the reader can currently inspect.
+    foreach (KeyValuePair<int, PdfCanvas> entry in pageCanvases.OrderBy(
+                 delegate(KeyValuePair<int, PdfCanvas> e) { return e.Key; }))
+    {
+        PdfCanvas canvas = entry.Value;
+        int pageTop = virtualScrollY + canvas.Top;
+        if (canvas.Image == null || pageTop + canvas.Height <= top || pageTop >= bottom ||
+            displayDpi <= PageDpi(entry.Key) * 1.05)
+            continue;
+        // A 2.5x screen-density pass makes a useful tile appear quickly. The next
+        // pass replaces it with the requested maximum sampling density.
+        int intermediateDpi = Math.Max(PageDpi(entry.Key) + 1,
+                                       (int)Math.Round(FullDpi * scale * 2.5f));
+        int regionDpi = intermediateDpi < displayDpi && canvas.RegionDpi < intermediateDpi
+                            ? intermediateDpi
+                            : displayDpi;
+        RectangleF bounds;
+        int left, regionTop, width, height;
+        if (!TryComputeVisibleRegion(entry.Key, canvas, regionDpi, out bounds, out left, out regionTop, out width,
+                                     out height))
+            continue;
+        if (canvas.CoversRegion(bounds, regionDpi))
+            continue;
+        string requestKey = regionDpi + "|" + left + "|" + regionTop + "|" + width + "|" + height, previousKey;
+        if (regionRequests.TryGetValue(entry.Key, out previousKey) && previousKey == requestKey)
+            continue;
+        regionRequests[entry.Key] = requestKey;
+        RectangleF image = canvas.ImageRect;
+        int outputWidth = Math.Max(1, (int)Math.Round(bounds.Width * image.Width)),
+            outputHeight = Math.Max(1, (int)Math.Round(bounds.Height * image.Height));
+        StartRegionRender(entry.Key, regionDpi, left, regionTop, width, height, outputWidth, outputHeight, bounds);
+        return;
+    }
+    // Once the visible tile is sharp, improve the cached whole page for later scrolling.
     foreach (KeyValuePair<int, PdfCanvas> entry in pageCanvases.OrderBy(
                  delegate(KeyValuePair<int, PdfCanvas> e) { return e.Key; }))
     {
@@ -3794,42 +3850,11 @@ void TryUpgradeVisiblePage()
         StartPageRender(current.FilePath, entry.Key, targetDpi, requestToken, total, true);
         return;
     }
-    // The page bitmap is already at its budget limit. Zooming past it is served by a
-    // high-resolution tile of the region that is actually on screen, so detail keeps
-    // improving with zoom instead of the page being stretched.
-    if (current == null)
-        return;
-    foreach (KeyValuePair<int, PdfCanvas> entry in pageCanvases.OrderBy(
-                 delegate(KeyValuePair<int, PdfCanvas> e) { return e.Key; }))
-    {
-        PdfCanvas canvas = entry.Value;
-        if (canvas.Image == null)
-            continue;
-        int pageTop = virtualScrollY + canvas.Top;
-        if (pageTop + canvas.Height <= top || pageTop >= bottom)
-            continue;
-        if (displayDpi <= PageDpi(entry.Key) * 1.05)
-            continue;
-        if (fullResolutionFailures.Contains(current.FilePath + "|" + entry.Key))
-            continue;
-        RectangleF bounds;
-        int left, regionTop, width, height;
-        if (!TryComputeVisibleRegion(canvas, out bounds, out left, out regionTop, out width, out height))
-            continue;
-        if (canvas.CoversRegion(bounds, displayDpi))
-            continue;
-        string requestKey = displayDpi + "|" + left + "|" + regionTop + "|" + width + "|" + height, previousKey;
-        if (regionRequests.TryGetValue(entry.Key, out previousKey) && previousKey == requestKey)
-            continue;
-        regionRequests[entry.Key] = requestKey;
-        StartRegionRender(entry.Key, displayDpi, left, regionTop, width, height, bounds);
-        return;
-    }
 }
 // Region pixels are measured in the same space as the page as drawn on screen, so a
 // tile rendered at DisplayDpi lands exactly one bitmap pixel per screen pixel.
-bool TryComputeVisibleRegion(PdfCanvas canvas, out RectangleF bounds, out int left, out int top, out int width,
-                             out int height)
+bool TryComputeVisibleRegion(int page, PdfCanvas canvas, int dpi, out RectangleF bounds, out int left, out int top,
+                             out int width, out int height)
 {
     bounds = RectangleF.Empty;
     left = top = width = height = 0;
@@ -3841,7 +3866,34 @@ bool TryComputeVisibleRegion(PdfCanvas canvas, out RectangleF bounds, out int le
     int viewBottom = Math.Min(canvas.Height, -canvas.Top + pdfViewport.ClientSize.Height);
     if (viewRight <= viewLeft || viewBottom <= viewTop)
         return false;
-    float padX = RegionMarginPixels / image.Width, padY = RegionMarginPixels / image.Height;
+    int cachedDpi = PageDpi(page);
+    int pagePixelWidth = Math.Max(1, (int)Math.Round(canvas.Image.Width * dpi / (double)cachedDpi));
+    int pagePixelHeight = Math.Max(1, (int)Math.Round(canvas.Image.Height * dpi / (double)cachedDpi));
+    double samplingX = pagePixelWidth / (double)image.Width, samplingY = pagePixelHeight / (double)image.Height;
+    double viewWidth = viewRight - viewLeft, viewHeight = viewBottom - viewTop;
+    double paddedArea = (viewWidth + 2.0 * RegionMarginPixels) * (viewHeight + 2.0 * RegionMarginPixels),
+           maxScreenArea = MaxHighResolutionRegionPixels / Math.Max(0.0001, samplingX * samplingY);
+    float marginScale = 1f;
+    if (paddedArea > maxScreenArea)
+    {
+        float low = 0f, high = 1f;
+        for (int i = 0; i < 12; i++)
+        {
+            float middle = (low + high) * 0.5f;
+            double candidateArea =
+                (viewWidth + 2.0 * RegionMarginPixels * middle) * (viewHeight + 2.0 * RegionMarginPixels * middle);
+            if (candidateArea <= maxScreenArea)
+                low = middle;
+            else
+                high = middle;
+        }
+        marginScale = low * 0.98f;
+    }
+    float padScreenX = Math.Min(RegionMarginPixels * marginScale,
+                                Math.Max(0f, (MaxRegionPixelSize / (float)samplingX - (float)viewWidth) * 0.5f)),
+          padScreenY = Math.Min(RegionMarginPixels * marginScale,
+                                Math.Max(0f, (MaxRegionPixelSize / (float)samplingY - (float)viewHeight) * 0.5f));
+    float padX = padScreenX / image.Width, padY = padScreenY / image.Height;
     float nx = (viewLeft - image.X) / image.Width - padX, ny = (viewTop - image.Y) / image.Height - padY;
     float nw = (viewRight - viewLeft) / image.Width + 2 * padX, nh = (viewBottom - viewTop) / image.Height + 2 * padY;
     nx = Math.Max(0, Math.Min(1 - padX, nx));
@@ -3850,24 +3902,35 @@ bool TryComputeVisibleRegion(PdfCanvas canvas, out RectangleF bounds, out int le
     nh = Math.Min(1 - ny, nh);
     if (nw <= 0 || nh <= 0)
         return false;
-    left = (int)Math.Floor(nx * image.Width);
-    top = (int)Math.Floor(ny * image.Height);
-    width = Math.Max(1, (int)Math.Ceiling(nw * image.Width));
-    height = Math.Max(1, (int)Math.Ceiling(nh * image.Height));
+    // The PDFium region bitmap must use the requested DPI's device-pixel space.
+    // Using the cached whole-page bitmap dimensions here made high-DPI tiles too
+    // small (and offset them incorrectly) whenever the page bitmap hit its cap.
+    left = (int)Math.Floor(nx * pagePixelWidth);
+    top = (int)Math.Floor(ny * pagePixelHeight);
+    width = Math.Max(1, (int)Math.Ceiling(nw * pagePixelWidth));
+    height = Math.Max(1, (int)Math.Ceiling(nh * pagePixelHeight));
     if (width > MaxRegionPixelSize)
     {
         width = MaxRegionPixelSize;
-        left = Math.Max(0, Math.Min((int)image.Width - width, left));
+        left = Math.Max(0, Math.Min(pagePixelWidth - width, left));
     }
     if (height > MaxRegionPixelSize)
     {
         height = MaxRegionPixelSize;
-        top = Math.Max(0, Math.Min((int)image.Height - height, top));
+        top = Math.Max(0, Math.Min(pagePixelHeight - height, top));
     }
-    bounds = new RectangleF(left / image.Width, top / image.Height, width / image.Width, height / image.Height);
+    if ((long)width * height > MaxHighResolutionRegionPixels)
+    {
+        double reduction = Math.Sqrt(MaxHighResolutionRegionPixels / (double)((long)width * height));
+        width = Math.Max(1, (int)Math.Floor(width * reduction));
+        height = Math.Max(1, (int)Math.Floor(height * reduction));
+    }
+    bounds = new RectangleF(left / (float)pagePixelWidth, top / (float)pagePixelHeight,
+                            width / (float)pagePixelWidth, height / (float)pagePixelHeight);
     return true;
 }
-void StartRegionRender(int page, int dpi, int left, int top, int width, int height, RectangleF bounds)
+void StartRegionRender(int page, int dpi, int left, int top, int width, int height, int outputWidth, int outputHeight,
+                       RectangleF bounds)
 {
     if (current == null)
         return;
@@ -3885,8 +3948,9 @@ void StartRegionRender(int page, int dpi, int left, int top, int width, int heig
         var req = (RegionRequest)e.Argument;
         PdfiumEngine.RenderedPage rendered =
             PdfiumEngine.RenderPageRegion(req.Path, req.Page, req.Dpi, req.Left, req.Top, req.Width, req.Height);
+        Bitmap displayBitmap = DownsampleRegionForDisplay(rendered.Bitmap, req.OutputWidth, req.OutputHeight);
         e.Result = new RegionResult { Path = req.Path, Page = req.Page,     Token = req.Token,
-                                      Dpi = req.Dpi,   Bounds = req.Bounds, Bitmap = rendered.Bitmap };
+                                      Dpi = req.Dpi,   Bounds = req.Bounds, Bitmap = displayBitmap };
     };
     worker.RunWorkerCompleted += delegate(object s, RunWorkerCompletedEventArgs e)
     {
@@ -3925,7 +3989,40 @@ void StartRegionRender(int page, int dpi, int left, int top, int width, int heig
         TrimPageCache(IdleBitmapBudget);
     };
     worker.RunWorkerAsync(new RegionRequest { Path = docKey, Page = page, Token = token, Dpi = dpi, Left = left,
-                                              Top = top, Width = width, Height = height, Bounds = bounds });
+                                              Top = top, Width = width, Height = height, OutputWidth = outputWidth,
+                                              OutputHeight = outputHeight, Bounds = bounds });
+}
+static Bitmap DownsampleRegionForDisplay(Bitmap source, int width, int height)
+{
+    if (source == null)
+        throw new ArgumentNullException("source");
+    width = Math.Max(1, width);
+    height = Math.Max(1, height);
+    if (source.Width <= width && source.Height <= height)
+        return source;
+    var output = new Bitmap(width, height, PixelFormat.Format24bppRgb);
+    try
+    {
+        using (Graphics graphics = Graphics.FromImage(output))
+        {
+            graphics.CompositingMode = CompositingMode.SourceCopy;
+            graphics.CompositingQuality = CompositingQuality.HighQuality;
+            graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            graphics.DrawImage(source, new Rectangle(0, 0, width, height),
+                               new Rectangle(0, 0, source.Width, source.Height), GraphicsUnit.Pixel);
+        }
+        return output;
+    }
+    catch
+    {
+        output.Dispose();
+        throw;
+    }
+    finally
+    {
+        source.Dispose();
+    }
 }
 protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
 {
@@ -4496,7 +4593,7 @@ class RenderResult
 class RegionRequest
 {
     public string Path;
-    public int Page, Token, Dpi, Left, Top, Width, Height;
+    public int Page, Token, Dpi, Left, Top, Width, Height, OutputWidth, OutputHeight;
     public RectangleF Bounds;
 }
 class RegionResult
@@ -6221,8 +6318,8 @@ public class PdfCanvas : PictureBox
                                             (shown.Y - target.Y) * regionImage.Height / target.Height,
                                             shown.Width * regionImage.Width / target.Width,
                                             shown.Height * regionImage.Height / target.Height);
-                // The tile was rendered for exactly this on-screen size, so it only needs a
-                // copy; interpolating it here costs tens of milliseconds for no visible gain.
+                // The tile is downsampled once in the worker. Smoothly adapt it only if the
+                // viewport changed after that render completed.
                 Rectangle destination = Rectangle.Round(shown);
                 Rectangle origin = Rectangle.Round(source);
                 origin.Width = Math.Min(origin.Width, regionImage.Width - origin.X);
@@ -6231,7 +6328,10 @@ public class PdfCanvas : PictureBox
                 destination.Height = Math.Min(destination.Height, origin.Height);
                 InterpolationMode previous = g.InterpolationMode;
                 g.CompositingMode = CompositingMode.SourceCopy;
-                g.InterpolationMode = InterpolationMode.NearestNeighbor;
+                bool resized = origin.Width > 0 && origin.Height > 0 &&
+                               (Math.Abs(destination.Width / (float)origin.Width - 1f) > 0.08f ||
+                                Math.Abs(destination.Height / (float)origin.Height - 1f) > 0.08f);
+                g.InterpolationMode = resized ? InterpolationMode.HighQualityBicubic : InterpolationMode.NearestNeighbor;
                 if (destination.Width > 0 && destination.Height > 0)
                     g.DrawImage(regionImage, destination, origin, GraphicsUnit.Pixel);
                 g.InterpolationMode = previous;

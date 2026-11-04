@@ -12,8 +12,9 @@ namespace PaperNote
     internal static class PdfiumEngine
     {
         const int MaxRenderDimension = 8192;
-        const int MaxRegionDimension = 8192;
+        const int MaxRegionDimension = 18000;
         const long MaxRenderPixels = 24000000L;
+        const long MaxRegionPixels = 150000000L;
         static readonly object Gate = new object();
         static bool initialized;
         static IntPtr document;
@@ -110,7 +111,7 @@ namespace PaperNote
                                                     int height)
         {
             if (width < 1 || height < 1 || width > MaxRegionDimension || height > MaxRegionDimension ||
-                (long)width * height > MaxRenderPixels)
+                (long)width * height > MaxRegionPixels)
                 throw new InvalidDataException("页面局部渲染尺寸超出上限（" + width + "×" + height + "）。");
             lock (Gate)
             {
