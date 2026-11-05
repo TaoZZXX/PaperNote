@@ -27,11 +27,14 @@
     <Reference Include="System.Core" />
     <Reference Include="System.Drawing" />
     <Reference Include="System.Runtime.Serialization" />
+    <Reference Include="System.Security" />
     <Reference Include="System.Windows.Forms" />
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="PaperNote.cs" />
+    <Compile Include="DoubaoTranslation.cs" />
+    <Compile Include="DoubaoPaperAssistant.cs" />
     <Compile Include="PdfiumEngine.cs" />
   </ItemGroup>
   <ItemGroup>

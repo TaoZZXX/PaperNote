@@ -8,6 +8,7 @@ PaperNote 是面向科研阅读的 Windows PDF 阅读与批注工具，采用本
 - 连续滚动阅读、缩放 PDF，并跳转到指定页码。
 - 选择文字并跨页复制；可复制纯文本或 LaTeX 文本。
 - 在 PDF 页面上创建、编辑和拖动批注。
+- 右键翻译选中的论文文字，或按 `Ctrl+Alt+T`；支持跨页选区、论文术语表，并保留公式、引用标记和链接。也可在 PDF 右键菜单中单独选择“豆包详细总结所选文字”。
 - 保存论文总结和页面尺寸缓存。
 - 使用 `Ctrl+B` 打开论文列表和论文总结面板。
 - 顶部品牌标识与 Windows 应用图标使用同一套论文便签图案，底色与 PDF 阅读区一致。
@@ -21,6 +22,10 @@ PaperNote 是面向科研阅读的 Windows PDF 阅读与批注工具，采用本
 ```text
 %LOCALAPPDATA%\PaperNote\library.json
 ```
+
+### 豆包论文翻译
+
+首次翻译时打开“豆包翻译设置”，填写火山方舟 API Key 和控制台提供的模型 ID/接入点 ID。设置也可从 PDF 右键菜单打开。API Key 使用 Windows 当前用户加密后保存在 `%LOCALAPPDATA%\PaperNote\doubao-settings.json`。只有主动触发翻译时，当前选中的文字会发送到火山方舟；不会自动上传整篇 PDF。译文缓存在 `%LOCALAPPDATA%\PaperNote\translation-cache.json`，相同文本和术语表可直接复用。
 
 ## 构建
 

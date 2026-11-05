@@ -259,6 +259,10 @@ namespace PaperNote
         int crossPageDragStartPage, crossPageDragStartWord, crossPageDragEndPage, crossPageDragEndWord;
         Dictionary<int, List<WordBox>> crossPageSelectedWords = new Dictionary<int, List<WordBox>>();
         string crossPageSelectedText = "";
+        bool screenshotSelectionActive;
+        Point screenshotSelectionStart, screenshotSelectionEnd;
+        Bitmap selectedPdfScreenshot;
+        int selectedScreenshotFirstPage = 1, selectedScreenshotLastPage = 1;
         bool pageIndicatorEditing;
         HashSet<string> loadingPages = new HashSet<string>();
         HashSet<string> regionLoads = new HashSet<string>();
@@ -300,6 +304,11 @@ namespace PaperNote
             FormClosed += delegate
             {
                 Application.RemoveMessageFilter(this);
+                if (selectedPdfScreenshot != null)
+                {
+                    selectedPdfScreenshot.Dispose();
+                    selectedPdfScreenshot = null;
+                }
                 if (drawerAnimation != null)
                 {
                     drawerAnimation.Stop();
@@ -3170,6 +3179,13 @@ public bool PreFilterMessage(ref Message m)
             return true;
         }
     }
+    if (m.Msg == WM_MOUSEHWHEEL || m.Msg == WM_MOUSEWHEEL)
+    {
+        Form activeForm = Form.ActiveForm;
+        if (activeForm != null && activeForm != this && activeForm.Visible &&
+            activeForm.RectangleToScreen(activeForm.ClientRectangle).Contains(Cursor.Position))
+            return false;
+    }
     if ((m.Msg != WM_MOUSEHWHEEL && m.Msg != WM_MOUSEWHEEL) || pdfViewport == null || !pdfViewport.IsHandleCreated)
         return false;
     if (!pdfViewport.RectangleToScreen(pdfViewport.ClientRectangle).Contains(Cursor.Position))
@@ -4048,6 +4064,11 @@ protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         ToggleLibraryDrawer();
         return true;
     }
+    if (keyData == (Keys.Control | Keys.Alt | Keys.T) && !String.IsNullOrWhiteSpace(selectedPdfText))
+    {
+        TranslatePdfSelection(selectedPdfCanvas ?? pdfCanvas, currentPage);
+        return true;
+    }
     if (keyData == (Keys.Control | Keys.Shift | Keys.C) && !String.IsNullOrWhiteSpace(selectedPdfText))
     {
         if (!HasEditorSelection())
@@ -4294,6 +4315,7 @@ void LoadCurrentPaperSummary()
 void SelectPaper(object sender, EventArgs e)
 {
     SaveCurrentPaperSummary();
+    ClearSelectedScreenshot();
     requestToken++;
     if (selectedPdfCanvas != null)
         selectedPdfCanvas.ClearDraft();
@@ -4618,14 +4640,28 @@ class RegionResult
 void AttachPageContextMenu(PdfCanvas canvas, int page)
 {
     var menu = new ContextMenuStrip();
+    var translateSelection = new ToolStripMenuItem("豆包翻译所选文字") { ShortcutKeyDisplayString = "Ctrl+Alt+T" };
+    var summarizeSelection = new ToolStripMenuItem("豆包详细总结所选文字");
+    var explainSelection = new ToolStripMenuItem("豆包解释选中区域并提问…");
+    var translationSettings = new ToolStripMenuItem("豆包翻译设置…");
     var copyText = new ToolStripMenuItem("复制选中文字");
     var copyFormula = new ToolStripMenuItem("复制公式（LaTeX）") { ShortcutKeyDisplayString = "Ctrl+Shift+C" };
     var extractImage = new ToolStripMenuItem("提取选区中的 PDF 图片对象");
     var armImageCopy = new ToolStripMenuItem("框选 PDF 图片区域…");
+    var copyScreenshot = new ToolStripMenuItem("复制框选截图");
+    var translateScreenshot = new ToolStripMenuItem("豆包翻译截图");
+    var explainScreenshot = new ToolStripMenuItem("豆包解释截图并提问…");
+    var summarizeScreenshot = new ToolStripMenuItem("豆包总结截图");
+    canvas.ScreenshotSelectionChanged += UpdateScreenshotSelection;
+    canvas.ScreenshotAssistantRequested += CaptureSelectedScreenshot;
     copyText.Click += delegate
     {
         CopyPdfSelection(false, canvas.SelectedText);
     };
+    translateSelection.Click += delegate { TranslatePdfSelection(canvas, page); };
+    summarizeSelection.Click += delegate { SummarizePdfSelection(canvas, page); };
+    explainSelection.Click += delegate { ExplainPdfSelection(canvas, page); };
+    translationSettings.Click += delegate { DoubaoTranslation.ShowSettings(this); };
     copyFormula.Click += delegate
     {
         CopyPdfSelection(true, canvas.SelectedText);
@@ -4639,6 +4675,10 @@ void AttachPageContextMenu(PdfCanvas canvas, int page)
         canvas.BeginImageRegionCopy();
         statusLabel.Text = "请按住 Ctrl+左键拖动框选 PDF 图片区域";
     };
+    copyScreenshot.Click += delegate { CopySelectedScreenshot(); };
+    translateScreenshot.Click += delegate { OpenSelectedScreenshotAssistant(DoubaoStartMode.Translate); };
+    explainScreenshot.Click += delegate { OpenSelectedScreenshotAssistant(DoubaoStartMode.Explain); };
+    summarizeScreenshot.Click += delegate { OpenSelectedScreenshotAssistant(DoubaoStartMode.Summarize); };
     canvas.ImageCopyStatus += delegate(string message)
     {
         statusLabel.Text = message;
@@ -4652,17 +4692,88 @@ void AttachPageContextMenu(PdfCanvas canvas, int page)
     };
     menu.Opening += delegate
     {
-        bool hasSelection = !String.IsNullOrWhiteSpace(canvas.SelectedText);
+        bool hasSelection = !String.IsNullOrWhiteSpace(canvas.SelectedText) ||
+                            (selectedPdfCanvas == canvas && !String.IsNullOrWhiteSpace(selectedPdfText));
+        translateSelection.Enabled = hasSelection;
+        summarizeSelection.Enabled = hasSelection;
+        explainSelection.Enabled = hasSelection;
         copyText.Enabled = hasSelection;
         copyFormula.Enabled = hasSelection;
         extractImage.Enabled = canvas.HasImageRegion;
+        bool hasScreenshot = selectedPdfScreenshot != null;
+        copyScreenshot.Enabled = hasScreenshot;
+        translateScreenshot.Enabled = hasScreenshot;
+        explainScreenshot.Enabled = hasScreenshot;
+        summarizeScreenshot.Enabled = hasScreenshot;
     };
+    menu.Items.Add(translateSelection);
+    menu.Items.Add(summarizeSelection);
+    menu.Items.Add(explainSelection);
+    menu.Items.Add(translationSettings);
+    menu.Items.Add(new ToolStripSeparator());
     menu.Items.Add(copyText);
     menu.Items.Add(copyFormula);
+    menu.Items.Add(new ToolStripSeparator());
+    menu.Items.Add(copyScreenshot);
+    menu.Items.Add(translateScreenshot);
+    menu.Items.Add(explainScreenshot);
+    menu.Items.Add(summarizeScreenshot);
     menu.Items.Add(new ToolStripSeparator());
     menu.Items.Add(extractImage);
     menu.Items.Add(armImageCopy);
     canvas.ContextMenuStrip = menu;
+}
+void TranslatePdfSelection(PdfCanvas canvas, int page)
+{
+    OpenPdfTextAssistant(canvas, page, DoubaoStartMode.Translate);
+}
+void SummarizePdfSelection(PdfCanvas canvas, int page)
+{
+    OpenPdfTextAssistant(canvas, page, DoubaoStartMode.Summarize);
+}
+void ExplainPdfSelection(PdfCanvas canvas, int page)
+{
+    OpenPdfTextAssistant(canvas, page, DoubaoStartMode.Explain);
+}
+void OpenPdfTextAssistant(PdfCanvas canvas, int page, DoubaoStartMode startMode)
+{
+    string selected = "";
+    if (crossPageSelectedWords.Count > 0 && !String.IsNullOrWhiteSpace(crossPageSelectedText))
+        selected = crossPageSelectedText;
+    else if (canvas != null && !String.IsNullOrWhiteSpace(canvas.SelectedText))
+        selected = canvas.SelectedText;
+    else if (canvas != null && selectedPdfCanvas == canvas)
+        selected = selectedPdfText;
+    if (String.IsNullOrWhiteSpace(selected))
+    {
+        statusLabel.Text = "请先在 PDF 中选中要翻译、解释或总结的文字";
+        return;
+    }
+
+    DoubaoSettings settings = DoubaoTranslation.LoadSettings();
+    if (!DoubaoTranslation.HasCredentials(settings))
+    {
+        MessageBox.Show(this, "首次使用请先填写火山方舟 API Key 和模型/接入点 ID。只会发送你主动选中的文字用于翻译、解释或总结。",
+                        "豆包论文翻译", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        if (DoubaoTranslation.ShowSettings(this) != DialogResult.OK)
+            return;
+        settings = DoubaoTranslation.LoadSettings();
+        if (!DoubaoTranslation.HasCredentials(settings))
+        {
+            MessageBox.Show(this, "请在设置中填写有效的 API Key、模型/接入点 ID 和 API 地址。", "豆包论文翻译",
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+    }
+
+    int firstPage = page, lastPage = page;
+    if (crossPageSelectedWords.Count > 1)
+    {
+        firstPage = crossPageSelectedWords.Keys.Min();
+        lastPage = crossPageSelectedWords.Keys.Max();
+    }
+    using (var form = new DoubaoTranslationForm(selected, firstPage, lastPage, settings, startMode))
+        form.ShowDialog(this);
 }
 bool ExtractPdfImageObject(PdfCanvas canvas, int page)
 {
@@ -4706,6 +4817,119 @@ void CopyDraggedImageRegion(PdfCanvas canvas, int page)
     {
         statusLabel.Text = "截图复制失败：" + ex.Message;
     }
+}
+void UpdateScreenshotSelection(Point start, Point end, bool active)
+{
+    screenshotSelectionStart = start;
+    screenshotSelectionEnd = end;
+    screenshotSelectionActive = active;
+    foreach (PdfCanvas page in pageCanvases.Values)
+    {
+        page.SetScreenshotSelection(active, start, end);
+        if (!active && page.Visible)
+            page.Update();
+    }
+}
+void CaptureSelectedScreenshot(Point start, Point end)
+{
+    if (pdfViewport == null || current == null)
+        return;
+    Rectangle selection = Rectangle.FromLTRB(Math.Min(start.X, end.X), Math.Min(start.Y, end.Y),
+                                               Math.Max(start.X, end.X), Math.Max(start.Y, end.Y));
+    Rectangle viewport = pdfViewport.RectangleToScreen(pdfViewport.ClientRectangle);
+    Rectangle clipped = Rectangle.Intersect(selection, viewport);
+    if (clipped.Width < 8 || clipped.Height < 8)
+    {
+        statusLabel.Text = "截图区域太小或不在 PDF 阅读区内，请重新按住 Ctrl 拖动";
+        return;
+    }
+
+    // Remove the blue selection frame before capturing the PDF content.
+    UpdateScreenshotSelection(Point.Empty, Point.Empty, false);
+    pdfViewport.Refresh();
+    Bitmap screenshot = new Bitmap(clipped.Width, clipped.Height, PixelFormat.Format32bppArgb);
+    try
+    {
+        using (Graphics graphics = Graphics.FromImage(screenshot))
+            graphics.CopyFromScreen(clipped.Location, Point.Empty, clipped.Size, CopyPixelOperation.SourceCopy);
+
+        int firstPage = Int32.MaxValue, lastPage = 0;
+        foreach (KeyValuePair<int, PdfCanvas> entry in pageCanvases)
+        {
+            PdfCanvas pageCanvas = entry.Value;
+            if (!pageCanvas.Visible || pageCanvas.Image == null)
+                continue;
+            Rectangle pageBounds = pageCanvas.RectangleToScreen(pageCanvas.ClientRectangle);
+            if (!Rectangle.Intersect(pageBounds, clipped).IsEmpty)
+            {
+                firstPage = Math.Min(firstPage, entry.Key);
+                lastPage = Math.Max(lastPage, entry.Key);
+            }
+        }
+        if (firstPage == Int32.MaxValue)
+            firstPage = lastPage = currentPage;
+        ClearSelectedScreenshot();
+        selectedPdfScreenshot = screenshot;
+        screenshot = null;
+        selectedScreenshotFirstPage = firstPage;
+        selectedScreenshotLastPage = lastPage;
+        statusLabel.Text = "截图区域已选中，可在 PDF 上右键复制或使用豆包翻译、解释、总结";
+    }
+    catch (Exception ex)
+    {
+        statusLabel.Text = "截图分析窗口无法打开：" + ex.Message;
+    }
+    finally
+    {
+        if (screenshot != null)
+            screenshot.Dispose();
+    }
+}
+void ClearSelectedScreenshot()
+{
+    if (selectedPdfScreenshot != null)
+    {
+        selectedPdfScreenshot.Dispose();
+        selectedPdfScreenshot = null;
+    }
+}
+void CopySelectedScreenshot()
+{
+    if (selectedPdfScreenshot == null)
+        return;
+    try
+    {
+        using (var copy = new Bitmap(selectedPdfScreenshot))
+            Clipboard.SetImage(copy);
+        statusLabel.Text = "框选截图已复制到剪贴板";
+    }
+    catch (Exception ex) { statusLabel.Text = "复制截图失败：" + ex.Message; }
+}
+void OpenSelectedScreenshotAssistant(DoubaoStartMode startMode)
+{
+    if (selectedPdfScreenshot == null)
+    {
+        statusLabel.Text = "请先按住 Ctrl+左键框选截图区域";
+        return;
+    }
+    DoubaoSettings settings = DoubaoTranslation.LoadSettings();
+    if (!DoubaoTranslation.HasCredentials(settings))
+    {
+        MessageBox.Show(this, "首次使用请先填写火山方舟 API Key 和模型/接入点 ID。截图分析要求所选模型/接入点支持图片输入。",
+                        "豆包论文助手", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        if (DoubaoTranslation.ShowSettings(this) != DialogResult.OK)
+            return;
+        settings = DoubaoTranslation.LoadSettings();
+        if (!DoubaoTranslation.HasCredentials(settings))
+        {
+            MessageBox.Show(this, "请在设置中填写有效的 API Key、模型/接入点 ID 和 API 地址。", "豆包论文助手",
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+    }
+    using (var form = new DoubaoTranslationForm("", selectedScreenshotFirstPage, selectedScreenshotLastPage,
+                                                settings, startMode, selectedPdfScreenshot))
+        form.ShowDialog(this);
 }
 PdfCanvas CreatePageCanvas(int page)
 {
@@ -5078,7 +5302,9 @@ public class PdfCanvas : PictureBox
     int consecutiveTextClicks;
     DateTime lastTextClickTime = DateTime.MinValue;
     Point lastTextClickPoint;
-    bool regionCopyArmed, regionCopyDrag, hasImageRegion, previewImageRegion;
+    bool regionCopyArmed, regionCopyDrag, ctrlScreenshotDrag, hasImageRegion, previewImageRegion;
+    Point screenshotDragStartScreen, screenshotSelectionStartScreen, screenshotSelectionEndScreen;
+    bool hasScreenshotSelection;
     RectangleF draft;
     RectangleF imageRegion;
     Bitmap regionImage;
@@ -5334,6 +5560,8 @@ public class PdfCanvas : PictureBox
     }
     public event Action<string> ImageCopyStatus;
     public event Action RegionImageExtractRequested;
+    public event Action<Point, Point, bool> ScreenshotSelectionChanged;
+    public event Action<Point, Point> ScreenshotAssistantRequested;
     public event Action<int, Point> DocumentTextDragStarted;
     public event Func<Point, bool> DocumentTextDragMoved;
     public event Func<Point, bool, bool> DocumentTextDragEnded;
@@ -5344,6 +5572,22 @@ public class PdfCanvas : PictureBox
         ClearDraft();
         Invalidate();
     }
+    public void SetScreenshotSelection(bool active, Point startScreen, Point endScreen)
+    {
+        RectangleF previous = RectangleF.Empty;
+        if (hasScreenshotSelection)
+            previous = RectangleF.Intersect(Normalize(PointToClient(screenshotSelectionStartScreen),
+                                                       PointToClient(screenshotSelectionEndScreen)), ClientRectangle);
+        hasScreenshotSelection = active;
+        screenshotSelectionStartScreen = startScreen;
+        screenshotSelectionEndScreen = endScreen;
+        RectangleF next = active
+            ? RectangleF.Intersect(Normalize(PointToClient(startScreen), PointToClient(endScreen)), ClientRectangle)
+            : RectangleF.Empty;
+        RectangleF dirty = RectangleF.Union(previous, next);
+        if (dirty.Width > 0 && dirty.Height > 0)
+            Invalidate(Rectangle.Inflate(Rectangle.Ceiling(dirty), 3, 3));
+    }
     protected override void OnMouseDown(MouseEventArgs e)
     {
         base.OnMouseDown(e);
@@ -5351,7 +5595,8 @@ public class PdfCanvas : PictureBox
             return;
         bool activateDraft = hasDraft && HitDraft(e.Location), hitMark = HitMark(e.Location);
         HideHoverNoteTag();
-        regionCopyDrag = regionCopyArmed || (ModifierKeys & Keys.Control) == Keys.Control;
+        ctrlScreenshotDrag = (ModifierKeys & Keys.Control) == Keys.Control;
+        regionCopyDrag = regionCopyArmed || ctrlScreenshotDrag;
         regionCopyArmed = false;
         hasImageRegion = false;
         previewImageRegion = false;
@@ -5368,9 +5613,12 @@ public class PdfCanvas : PictureBox
             ClearDraft();
         Focus();
         dragging = true;
-        Cursor = Cursors.IBeam;
+        Cursor = ctrlScreenshotDrag ? Cursors.Arrow : Cursors.IBeam;
         start = e.Location;
         end = e.Location;
+        screenshotDragStartScreen = PointToScreen(e.Location);
+        if (ctrlScreenshotDrag && ScreenshotSelectionChanged != null)
+            ScreenshotSelectionChanged(screenshotDragStartScreen, Cursor.Position, true);
         previewWords = null;
         if (!regionCopyDrag && !activateDraft && !hitMark && ImageBounds().Contains(e.Location))
         {
@@ -5392,8 +5640,10 @@ public class PdfCanvas : PictureBox
         base.OnMouseMove(e);
         if (dragging)
         {
-            Cursor = Cursors.IBeam;
+            Cursor = ctrlScreenshotDrag ? Cursors.Arrow : Cursors.IBeam;
             end = e.Location;
+            if (ctrlScreenshotDrag && ScreenshotSelectionChanged != null)
+                ScreenshotSelectionChanged(screenshotDragStartScreen, Cursor.Position, true);
             bool globalCrossPage = false;
             if (textDragPotential && (Math.Abs(e.X - start.X) >= 9 || Math.Abs(e.Y - start.Y) >= 9) &&
                 DocumentTextDragMoved != null)
@@ -5433,7 +5683,8 @@ public class PdfCanvas : PictureBox
         }
         else
         {
-            Cursor = (HitDraft(e.Location) || HitMark(e.Location)) ? Cursors.Hand : Cursors.IBeam;
+            Cursor = (ModifierKeys & Keys.Control) == Keys.Control ? Cursors.Arrow
+                     : (HitDraft(e.Location) || HitMark(e.Location)) ? Cursors.Hand : Cursors.IBeam;
             UpdateHoverNoteTag(e.Location);
         }
     }
@@ -5453,7 +5704,8 @@ public class PdfCanvas : PictureBox
         end = e.Location;
         previewWords = null;
         previewImageRegion = false;
-        Cursor = HitDraft(e.Location) || HitMark(e.Location) ? Cursors.Hand : Cursors.IBeam;
+        Cursor = ctrlScreenshotDrag && (ModifierKeys & Keys.Control) == Keys.Control ? Cursors.Arrow
+                 : HitDraft(e.Location) || HitMark(e.Location) ? Cursors.Hand : Cursors.IBeam;
         bool textDrag = textDragPotential, crossDrag = crossPageDragDetected;
         textDragPotential = false;
         crossPageDragDetected = false;
@@ -5466,6 +5718,22 @@ public class PdfCanvas : PictureBox
         {
             ResetTextClickSequence();
             regionCopyDrag = false;
+            if (ctrlScreenshotDrag)
+            {
+                ctrlScreenshotDrag = false;
+                Point screenshotEndScreen = Cursor.Position;
+                if (ScreenshotSelectionChanged != null)
+                    ScreenshotSelectionChanged(Point.Empty, Point.Empty, false);
+                if (Math.Abs(screenshotEndScreen.X - screenshotDragStartScreen.X) >= 8 &&
+                    Math.Abs(screenshotEndScreen.Y - screenshotDragStartScreen.Y) >= 8)
+                {
+                    if (ScreenshotAssistantRequested != null)
+                        ScreenshotAssistantRequested(screenshotDragStartScreen, screenshotEndScreen);
+                }
+                else if (ImageCopyStatus != null)
+                    ImageCopyStatus("截图区域太小，请按住 Ctrl+左键拖动框选（可跨越当前可见页面）");
+                return;
+            }
             if (Math.Abs(end.X - start.X) >= 6 && Math.Abs(end.Y - start.Y) >= 6 &&
                 SetImageRegion(Normalize(start, end)))
             {
@@ -6409,6 +6677,22 @@ public class PdfCanvas : PictureBox
                     pen.DashStyle = DashStyle.Dash;
                     g.DrawRectangle(pen, r.X, r.Y, r.Width, r.Height);
                 }
+        }
+        if (hasScreenshotSelection)
+        {
+            Point first = PointToClient(screenshotSelectionStartScreen);
+            Point last = PointToClient(screenshotSelectionEndScreen);
+            RectangleF selection = RectangleF.Intersect(Normalize(first, last), ClientRectangle);
+            if (selection.Width > 0 && selection.Height > 0)
+            {
+                using (var brush = new SolidBrush(Color.FromArgb(38, 26, 115, 232)))
+                    g.FillRectangle(brush, selection);
+                using (var pen = new Pen(Color.FromArgb(235, 26, 115, 232), 2))
+                {
+                    pen.DashStyle = DashStyle.Dash;
+                    g.DrawRectangle(pen, selection.X, selection.Y, selection.Width, selection.Height);
+                }
+            }
         }
         if (hasCaret && caretVisible && caretWordIndex >= 0 && caretWordIndex < pageWords.Count)
         {
