@@ -15,6 +15,7 @@ namespace PaperNote
         const int MaxRegionDimension = 18000;
         const long MaxRenderPixels = 24000000L;
         const long MaxRegionPixels = 150000000L;
+        internal static readonly Color PaperBackgroundColor = Color.FromArgb(255, 248, 238);
         static readonly object Gate = new object();
         static bool initialized;
         static IntPtr document;
@@ -73,6 +74,11 @@ namespace PaperNote
 
         public static RenderedPage RenderPage(string path, int pageNumber, int dpi)
         {
+            return RenderPage(path, pageNumber, dpi, PaperBackgroundColor);
+        }
+
+        public static RenderedPage RenderPage(string path, int pageNumber, int dpi, Color backgroundColor)
+        {
             lock (Gate)
             {
                 IntPtr doc = GetDocument(path);
@@ -93,7 +99,7 @@ namespace PaperNote
                         (long)width * height > MaxRenderPixels)
                         throw new InvalidDataException("页面渲染尺寸超过单页资源上限（" + width + "×" + height +
                                                        "），将降低 DPI 重试。");
-                    Bitmap rendered = RenderToBitmap(page, width, height, 0, 0, width, height);
+                    Bitmap rendered = RenderToBitmap(page, width, height, 0, 0, width, height, backgroundColor);
                     return new RenderedPage { PageCount = count, Bitmap = rendered };
                 }
                 finally
@@ -129,7 +135,8 @@ namespace PaperNote
                     double pageHeight = Native.FPDF_GetPageHeight(page);
                     int deviceWidth = Math.Max(1, checked((int)Math.Round(pageWidth * dpi / 72.0)));
                     int deviceHeight = Math.Max(1, checked((int)Math.Round(pageHeight * dpi / 72.0)));
-                    Bitmap rendered = RenderToBitmap(page, deviceWidth, deviceHeight, left, top, width, height);
+                    Bitmap rendered = RenderToBitmap(page, deviceWidth, deviceHeight, left, top, width, height,
+                                                     PaperBackgroundColor);
                     return new RenderedPage { PageCount = count, Bitmap = rendered };
                 }
                 finally
@@ -140,7 +147,7 @@ namespace PaperNote
         }
 
         static Bitmap RenderToBitmap(IntPtr page, int deviceWidth, int deviceHeight, int left, int top, int width,
-                                     int height)
+                                     int height, Color backgroundColor)
         {
             IntPtr bitmap = IntPtr.Zero;
             Bitmap output = null;
@@ -156,7 +163,8 @@ namespace PaperNote
                                                     outputData.Stride);
                 if (bitmap == IntPtr.Zero)
                     throw new OutOfMemoryException("PDFium 无法分配页面位图（" + width + "×" + height + "）。");
-                Native.FPDFBitmap_FillRect(bitmap, 0, 0, width, height, 0xFFFFFFFF);
+                Native.FPDFBitmap_FillRect(bitmap, 0, 0, width, height,
+                                           unchecked((uint)backgroundColor.ToArgb()));
                 Native.FPDF_RenderPageBitmap(bitmap, page, -left, -top, deviceWidth, deviceHeight, 0,
                                              1 /* FPDF_ANNOT */);
                 Native.FPDFBitmap_Destroy(bitmap);

@@ -416,7 +416,7 @@ namespace PaperNote
             };
             pdfViewport =
                 new Panel { Dock = DockStyle.Fill, AutoScroll = false, BackColor = Color.FromArgb(251, 231, 214) };
-            pdfCanvas.BackColor = Color.White;
+            pdfCanvas.BackColor = PdfiumEngine.PaperBackgroundColor;
             pdfCanvas.SizeMode = PictureBoxSizeMode.StretchImage;
             pdfPages = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(251, 231, 214) };
             pdfViewport.Controls.Add(pdfPages);
@@ -1160,10 +1160,21 @@ namespace PaperNote
                     e.Graphics.FillEllipse(hoverBrush, hoverCircle);
             }
             Color closeColor = removeHovered ? Color.FromArgb(197, 34, 31) : Color.FromArgb(130, 125, 138);
-            using (var closeFont = new Font("Segoe UI", 17F, FontStyle.Regular, GraphicsUnit.Pixel))
-                TextRenderer.DrawText(e.Graphics, "×", closeFont, closeRect, closeColor,
-                                      TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
-                                          TextFormatFlags.NoPrefix);
+            float closeCenterX = closeRect.Left + closeRect.Width * 0.5f,
+                  closeCenterY = closeRect.Top + closeRect.Height * 0.5f,
+                  closeRadius = 4.2f;
+            SmoothingMode previousSmoothing = e.Graphics.SmoothingMode;
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            using (var closePen = new Pen(closeColor, 1.8f))
+            {
+                closePen.StartCap = LineCap.Round;
+                closePen.EndCap = LineCap.Round;
+                e.Graphics.DrawLine(closePen, closeCenterX - closeRadius, closeCenterY - closeRadius,
+                                    closeCenterX + closeRadius, closeCenterY + closeRadius);
+                e.Graphics.DrawLine(closePen, closeCenterX + closeRadius, closeCenterY - closeRadius,
+                                    closeCenterX - closeRadius, closeCenterY + closeRadius);
+            }
+            e.Graphics.SmoothingMode = previousSmoothing;
             if (selected)
                 using (var pen = new Pen(Color.FromArgb(255, 190, 61), 3)) e.Graphics.DrawLine(
                     pen, e.Bounds.Left + 1, e.Bounds.Top + 8, e.Bounds.Left + 1, e.Bounds.Bottom - 8);
@@ -3307,7 +3318,8 @@ Bitmap CreateCrossPageComposite()
             if (!crossPageSelectedWords.TryGetValue(page, out words))
                 continue;
             int dpi = 96;
-            PdfiumEngine.RenderedPage rendered = PdfiumEngine.RenderPage(current.FilePath, page, dpi);
+            PdfiumEngine.RenderedPage rendered =
+                PdfiumEngine.RenderPage(current.FilePath, page, dpi, Color.White);
             Bitmap source = rendered.Bitmap;
             Bitmap crop = null;
             try
@@ -4697,7 +4709,8 @@ void CopyDraggedImageRegion(PdfCanvas canvas, int page)
 }
 PdfCanvas CreatePageCanvas(int page)
 {
-    PdfCanvas canvas = new PdfCanvas { BackColor = Color.White, SizeMode = PictureBoxSizeMode.Zoom,
+    PdfCanvas canvas = new PdfCanvas { BackColor = PdfiumEngine.PaperBackgroundColor,
+                                       SizeMode = PictureBoxSizeMode.Zoom,
                                        Margin = new Padding(0, 0, 0, 20) };
     canvas.MouseWheel += ReaderWheel;
     AttachPageContextMenu(canvas, page);
@@ -6293,7 +6306,7 @@ public class PdfCanvas : PictureBox
     }
     void DrawPage(Graphics g, RectangleF clip)
     {
-        g.Clear(Color.White);
+        g.Clear(PdfiumEngine.PaperBackgroundColor);
         RectangleF b = ImageBounds();
         if (b.Width <= 0)
             return;
