@@ -15,6 +15,9 @@ using System.Globalization;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Reflection;
+using System.Collections;
+using System.Resources;
+using System.Security.Cryptography;
 
 namespace PaperNote
 {
@@ -132,18 +135,148 @@ namespace PaperNote
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         static extern bool SetDllDirectory(string path);
 
+        static bool IsCompleteRuntimeDirectory(string directory, IDictionary<string, byte[]> files)
+        {
+            if (!Directory.Exists(directory))
+                return false;
+            foreach (KeyValuePair<string, byte[]> entry in files)
+            {
+                string path = Path.Combine(directory, entry.Key);
+                if (!File.Exists(path) || new FileInfo(path).Length != entry.Value.Length)
+                    return false;
+            }
+            return true;
+        }
+
+        static string ExtractEmbeddedRuntime()
+        {
+            Assembly assembly = Assembly.GetExecutingAssembly();
+            using (Stream stream = assembly.GetManifestResourceStream("PaperNote.native-runtime.resources"))
+            {
+                if (stream == null)
+                    return null;
+                var files = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+                using (var reader = new ResourceReader(stream))
+                {
+                    IDictionaryEnumerator entries = reader.GetEnumerator();
+                    while (entries.MoveNext())
+                    {
+                        string name = entries.Key as string;
+                        byte[] bytes = entries.Value as byte[];
+                        if (String.IsNullOrWhiteSpace(name) || Path.GetFileName(name) != name ||
+                            !name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) || bytes == null || bytes.Length == 0)
+                            continue;
+                        files[name] = bytes;
+                    }
+                }
+                if (files.Count == 0)
+                    throw new InvalidDataException("内嵌 PDFium 运行库资源为空或格式无效。");
+
+                using (SHA256 sha = SHA256.Create())
+                using (var fingerprintStream = new MemoryStream())
+                {
+                    foreach (KeyValuePair<string, byte[]> entry in files.OrderBy(delegate(KeyValuePair<string, byte[]> x) { return x.Key; }))
+                    {
+                        byte[] filename = Encoding.UTF8.GetBytes(entry.Key.ToLowerInvariant() + "\n");
+                        fingerprintStream.Write(filename, 0, filename.Length);
+                        fingerprintStream.Write(entry.Value, 0, entry.Value.Length);
+                    }
+                    string fingerprint = BitConverter.ToString(sha.ComputeHash(fingerprintStream.ToArray()))
+                        .Replace("-", "").Substring(0, 16).ToLowerInvariant();
+                    string localData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                    string executableDirectory = Path.GetDirectoryName(Application.ExecutablePath);
+                    string temporaryDirectory = Path.GetTempPath();
+                    string[] roots = new string[]
+                    {
+                        String.IsNullOrWhiteSpace(localData) ? null : Path.Combine(localData, "PaperNoteNativeRuntime"),
+                        String.IsNullOrWhiteSpace(localData) ? null : Path.Combine(localData, "PaperNote", "NativeRuntime"),
+                        String.IsNullOrWhiteSpace(temporaryDirectory) ? null : Path.Combine(temporaryDirectory, "PaperNoteNativeRuntime"),
+                        String.IsNullOrWhiteSpace(temporaryDirectory) ? null : Path.Combine(temporaryDirectory, "PaperNote", "NativeRuntime"),
+                        String.IsNullOrWhiteSpace(executableDirectory) ? null : Path.Combine(executableDirectory, "PaperNoteNativeRuntime")
+                    };
+                    var failures = new List<string>();
+                    foreach (string root in roots)
+                    {
+                        if (String.IsNullOrWhiteSpace(root))
+                            continue;
+                        string directory = Path.Combine(root, fingerprint);
+                        if (IsCompleteRuntimeDirectory(directory, files))
+                            return directory;
+                        string temporary = directory + ".tmp-" + Guid.NewGuid().ToString("N");
+                        try
+                        {
+                            Directory.CreateDirectory(root);
+                            Directory.CreateDirectory(temporary);
+                            foreach (KeyValuePair<string, byte[]> entry in files)
+                                File.WriteAllBytes(Path.Combine(temporary, entry.Key), entry.Value);
+                            try
+                            {
+                                Directory.Move(temporary, directory);
+                                return directory;
+                            }
+                            catch (IOException)
+                            {
+                                if (IsCompleteRuntimeDirectory(directory, files))
+                                    return directory;
+                                throw;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            failures.Add(root + "：" + ex.Message);
+                            try
+                            {
+                                if (Directory.Exists(temporary))
+                                    Directory.Delete(temporary, true);
+                            }
+                            catch { }
+                        }
+                    }
+                    throw new IOException("无法释放内嵌 PDFium 运行库：\r\n" + String.Join("\r\n", failures.ToArray()));
+                }
+            }
+        }
+
         [STAThread]
         static void Main()
         {
-            string runtimeFolder = "PaperNoteRuntime-PDFium";
-            string executableName = Path.GetFileNameWithoutExtension(Application.ExecutablePath),
-                   updatedPrefix = "PaperNote-PDFium-Updated";
-            if (executableName.StartsWith(updatedPrefix, StringComparison.OrdinalIgnoreCase))
-                runtimeFolder = "PaperNoteRuntime-PDFium" + executableName.Substring("PaperNote-PDFium".Length);
-            string runtimeDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, runtimeFolder);
-            if (Directory.Exists(runtimeDirectory))
+            string runtimeDirectory = null;
+            try
             {
-                SetDllDirectory(runtimeDirectory);
+                runtimeDirectory = ExtractEmbeddedRuntime();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("PaperNote 无法准备内嵌 PDFium 运行库。\r\n\r\n" + ex.Message,
+                                "PaperNote 启动失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            if (String.IsNullOrWhiteSpace(runtimeDirectory))
+            {
+                string runtimeFolder = "PaperNoteRuntime-PDFium";
+                string executableName = Path.GetFileNameWithoutExtension(Application.ExecutablePath),
+                       updatedPrefix = "PaperNote-PDFium-Updated";
+                if (executableName.StartsWith(updatedPrefix, StringComparison.OrdinalIgnoreCase))
+                    runtimeFolder = "PaperNoteRuntime-PDFium" + executableName.Substring("PaperNote-PDFium".Length);
+                string sidecarDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, runtimeFolder);
+                if (Directory.Exists(sidecarDirectory))
+                    runtimeDirectory = sidecarDirectory;
+                else if (File.Exists(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "pdfium.dll")))
+                    runtimeDirectory = AppDomain.CurrentDomain.BaseDirectory;
+            }
+            if (String.IsNullOrWhiteSpace(runtimeDirectory) || !Directory.Exists(runtimeDirectory))
+            {
+                MessageBox.Show("没有找到内嵌或外置的 PDFium 运行库。请重新下载完整的 PaperNote.exe。",
+                                "PaperNote 启动失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            if (!SetDllDirectory(runtimeDirectory))
+            {
+                MessageBox.Show("无法设置 PDFium 运行库目录：" + new System.ComponentModel.Win32Exception().Message,
+                                "PaperNote 启动失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            {
                 AppDomain.CurrentDomain.AssemblyResolve += delegate(object sender, ResolveEventArgs args)
                 {
                     string name = new AssemblyName(args.Name).Name + ".dll";

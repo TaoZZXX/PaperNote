@@ -41,6 +41,9 @@
     <EmbeddedResource Include="assets\papernote-logo.png">
       <LogicalName>PaperNote.assets.papernote-logo.png</LogicalName>
     </EmbeddedResource>
+    <EmbeddedResource Include="$(NativeRuntimeResources)" Condition="'$(NativeRuntimeResources)' != '' and Exists('$(NativeRuntimeResources)')">
+      <LogicalName>PaperNote.native-runtime.resources</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="All" />
